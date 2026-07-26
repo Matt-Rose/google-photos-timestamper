@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "google-photos-timestamper"
+version = "0.1.0"
+description = "Add back creation time metadata to photos exported from Google Photos"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+  "piexif"
+]
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64"]
+
+[tool.pixi.tasks]
+run = "python main.py"
+
+[tool.pixi.dependencies]
+python = "3.9.*"
+pip = "*"
+
+[tool.pixi.pypi-dependencies]
+google-photos-timestamper = { path = ".", editable = true }
