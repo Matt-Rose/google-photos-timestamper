@@ -1,11 +1,8 @@
 """Integration tests for video (QuickTime container) handling.
 
-process_file() reports success for videos today, but write_exif_tags() only
-writes EXIF/XMP date tags -- it never touches the QuickTime CreateDate /
-Track*/Media* date tags that Finder and Apple Photos actually read for a
-video's date. test_process_file_sets_quicktime_create_date_for_video below
-is a known-failing regression test documenting that bug; it should start
-passing once write_exif_tags is fixed to also set the QuickTime tags.
+write_exif_tags() also sets the QuickTime CreateDate/ModifyDate/Track*/
+Media* date tags (in addition to EXIF/XMP), since those are what Finder and
+Apple Photos actually read for a video's date.
 """
 
 import json
@@ -45,3 +42,16 @@ def test_process_file_sets_quicktime_create_date_for_video(sample_mov):
 
     tags = _read_tags(video, "QuickTime:CreateDate")
     assert tags.get("CreateDate") == "2020:01:15 10:30:00"
+
+
+def test_process_file_sets_quicktime_gps_for_video(sample_mov):
+    video = sample_mov()
+    write_sidecar(video + ".json", OLD_TIMESTAMP, lat=51.5, lon=-0.12, alt=10.0)
+
+    process_file(video)
+
+    tags = _read_tags(video, "QuickTime:GPSCoordinates")
+    coords = tags.get("GPSCoordinates", "")
+    parts = [float(p) for p in coords.split()]
+    assert round(parts[0], 2) == 51.5
+    assert round(parts[1], 2) == -0.12

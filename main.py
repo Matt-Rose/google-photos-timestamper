@@ -258,7 +258,13 @@ def write_exif_tags(
     lon: Optional[float],
     alt: Optional[float],
 ) -> None:
-    """Write DateTimeOriginal/Digitized and/or GPS EXIF tags via exiftool.
+    """Write DateTimeOriginal/Digitized and/or GPS tags via exiftool.
+
+    Also writes the equivalent QuickTime tags (CreateDate/ModifyDate/
+    Track*/Media* dates, GPSCoordinates), since that's what Finder and Apple
+    Photos actually read for a video's date/location -- EXIF/XMP tags alone
+    are ignored for .mp4/.mov files. Writing them on a photo file is a
+    harmless no-op (exiftool exits 0; the tag simply isn't applicable).
 
     Pass timestamp=None to write GPS only (preserves an existing good timestamp).
     -overwrite_original suppresses the creation of *_original backup files.
@@ -273,6 +279,15 @@ def write_exif_tags(
             "%Y:%m:%d %H:%M:%S"
         )
         args += [f"-DateTimeOriginal={dt_str}", f"-DateTimeDigitized={dt_str}"]
+        for tag in (
+            "QuickTime:CreateDate",
+            "QuickTime:ModifyDate",
+            "QuickTime:TrackCreateDate",
+            "QuickTime:TrackModifyDate",
+            "QuickTime:MediaCreateDate",
+            "QuickTime:MediaModifyDate",
+        ):
+            args.append(f"-{tag}={dt_str}")
 
     if lat is not None and lon is not None and not gps_looks_bad(lat, lon):
         args += [
@@ -284,6 +299,8 @@ def write_exif_tags(
         if alt is not None:
             ref = "Above Sea Level" if alt >= 0 else "Below Sea Level"
             args += [f"-GPSAltitude={abs(alt)}", f"-GPSAltitudeRef={ref}"]
+        qt_coords = f"{lat}, {lon}" + (f", {alt}" if alt is not None else "")
+        args.append(f"-QuickTime:GPSCoordinates={qt_coords}")
 
     args.append(path)
 
