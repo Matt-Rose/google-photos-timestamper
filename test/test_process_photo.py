@@ -1,13 +1,6 @@
 """Integration tests that exercise process_file() against a real image file
 through the real exiftool binary (no mocking) so we catch anything a pure
 logic test would miss.
-
-test_process_file_sets_mtime_to_photo_taken_time_when_exif_also_written is a
-known-failing regression test: process_file() calls os.utime() *before*
-write_exif_tags(), but exiftool -overwrite_original rewrites the file and
-resets its mtime to wall-clock "now" on any write -- so for every file that
-actually needs an EXIF write, the resulting mtime is "whenever the script
-ran", not the photo's real taken time.
 """
 
 import json

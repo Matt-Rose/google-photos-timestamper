@@ -371,7 +371,6 @@ def process_file(path: str) -> FileResult:
             mtime_ts = exif_dt.timestamp()
         else:
             mtime_ts = json_ts
-        os.utime(path, (mtime_ts, mtime_ts))
         note_parts = ["mtime"]
 
         # Only write what actually needs updating — skip timestamp if already good,
@@ -398,6 +397,11 @@ def process_file(path: str) -> FileResult:
                 note_parts.append(f"EXIF write failed ({detail})")
             except subprocess.TimeoutExpired:
                 note_parts.append("EXIF write timed out")
+
+        # Set mtime last: exiftool -overwrite_original rewrites the file on
+        # any write, resetting its mtime to "now" -- so this must run after
+        # write_exif_tags, not before, or the mtime ends up wrong.
+        os.utime(path, (mtime_ts, mtime_ts))
 
         return FileResult(path, Outcome.UPDATED, ", ".join(note_parts), json_path)
 
