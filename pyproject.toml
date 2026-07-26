@@ -20,7 +20,7 @@ platforms = ["osx-arm64", "osx-64", "linux-64"]
 run = "python main.py"
 
 [tool.pixi.dependencies]
-python = "3.9.*"
+python = ">=3.14"
 pip = "*"
 
 [tool.pixi.pypi-dependencies]
