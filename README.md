@@ -1,6 +1,6 @@
 # google-photos-timestamper
 
-Usign [Google Takeout](https://takeout.google.com/settings/takeout) you can export your photos saved in Google Photos to migrate wherever else you want
+Using [Google Takeout](https://takeout.google.com/settings/takeout) you can export your photos saved in Google Photos to migrate wherever else you want
 However, the while on google servers, the metadata from the files gets stripped from the images and put in separate JSONs. 
 
 This script is meant to add back the creation time of the images from their associated JSON files.
@@ -8,7 +8,7 @@ The script can be easily modified to extract any piece of metadata from the imag
 
 ## Before running
 Before running the script I suggest downloading all the images you want to pull of Google Photos and running the script once for all of them. 
-I noticed that Google Takeout doesn't make sure thatboth the image and it's json file are in the same archive from the split download. 
+I noticed that Google Takeout doesn't make sure that both the image and its json file are in the same archive from the split download. 
 
 If you run the script on each archive at a time you might end up with photos that weren't fixed.
 
@@ -29,7 +29,7 @@ There is no filtering in place to only look for image file extensions
 ## JSON naming
 
 At first, it lookes like for each `Image.ext` there is an associated `Image.ext.json` file. 
-However, while working on this I encoutered differet namings and included rules for them:
+However, while working on this I encountered different namings and included rules for them:
 
 1. Duplicate files
 
@@ -46,3 +46,18 @@ So `Image-Editate.jpeg` will have its metadata in `Image.jpeg.json`
 This rule might not apply to you. I think due to some wierd Mac OS bug I ended up with some JSON files that also contained some timestamps in their names.
 So I included a rule that given an image that has no perfect match for its json after checking the above 2 rules, 
 it looks for the first JSON file that contains the name of the image file
+
+```
+
+## Install
+
+This project now provides a `pyproject.toml` (PEP 621). Dependencies are listed there and target Python 3.9.
+
+- To install with pip:
+
+```
+python3 -m pip install --upgrade pip
+python3 -m pip install .
+```
+
+- If you manage environments with `pixi`, create/use a Python 3.9 environment and install the listed dependencies; a minimal `pixi.toml` is included.
