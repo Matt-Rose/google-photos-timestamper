@@ -82,3 +82,22 @@ def test_process_file_no_sidecar_and_no_good_exif_is_no_json(sample_jpg):
     photo = sample_jpg()
     result = process_file(photo)
     assert result.outcome == Outcome.NO_JSON
+
+
+def test_process_file_reports_clear_error_and_keeps_sidecar_data_on_shape_drift(
+    sample_jpg,
+):
+    """A malformed sidecar (renamed sub-key) must produce a specific error
+    message and still carry sidecar_data, so the dry-run report's
+    expectation-check section can flag exactly what deviated -- not just a
+    bare KeyError with no diagnostic value."""
+    photo = sample_jpg()
+    with open(photo + ".json", "w") as f:
+        json.dump({"photoTakenTime": {"time-stamp": str(OLD_TIMESTAMP)}}, f)
+
+    result = process_file(photo)
+
+    assert result.outcome == Outcome.ERROR
+    assert "photoTakenTime" in result.error
+    assert "time-stamp" in result.error
+    assert result.sidecar_data == {"photoTakenTime": {"time-stamp": str(OLD_TIMESTAMP)}}

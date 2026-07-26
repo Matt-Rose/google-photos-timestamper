@@ -1,4 +1,47 @@
-from main import FileResult, Outcome, write_dryrun_summary
+from main import (
+    FileResult,
+    Outcome,
+    _describe_geo_anomaly,
+    _describe_timestamp_anomaly,
+    write_dryrun_summary,
+)
+
+
+def test_describe_timestamp_anomaly_none_for_expected_shape():
+    assert _describe_timestamp_anomaly({"photoTakenTime": {"timestamp": "100"}}) is None
+
+
+def test_describe_timestamp_anomaly_flags_missing_photo_taken_time():
+    issue = _describe_timestamp_anomaly({"title": "x"})
+    assert "no `photoTakenTime` key" in issue
+
+
+def test_describe_timestamp_anomaly_flags_renamed_sub_key():
+    issue = _describe_timestamp_anomaly({"photoTakenTime": {"time-stamp": "100"}})
+    assert "no `timestamp` key" in issue
+    assert "time-stamp" in issue
+
+
+def test_describe_timestamp_anomaly_flags_non_numeric_value():
+    issue = _describe_timestamp_anomaly({"photoTakenTime": {"timestamp": "soon"}})
+    assert "isn't a number" in issue
+
+
+def test_describe_geo_anomaly_none_when_absent():
+    # No location block at all is normal, not an anomaly.
+    assert _describe_geo_anomaly({"photoTakenTime": {"timestamp": "100"}}) is None
+
+
+def test_describe_geo_anomaly_none_for_expected_shape():
+    data = {"geoDataExif": {"latitude": 1.0, "longitude": 2.0}}
+    assert _describe_geo_anomaly(data) is None
+
+
+def test_describe_geo_anomaly_flags_renamed_sub_key():
+    data = {"geoDataExif": {"lat": 1.0, "lon": 2.0}}
+    issue = _describe_geo_anomaly(data)
+    assert "geoDataExif" in issue
+    assert "latitude/longitude" in issue
 
 
 def test_dryrun_summary_counts_and_change_breakdown(tmp_path):
@@ -88,6 +131,7 @@ def test_dryrun_summary_surveys_sidecar_fields_not_already_used(tmp_path):
             f"{input_dir}/a.jpg",
             Outcome.UPDATED,
             "mtime, EXIF timestamp",
+            json_path=f"{input_dir}/a.jpg.json",
             sidecar_data={
                 "photoTakenTime": {"timestamp": "100"},
                 "description": "A lovely sunset",
@@ -99,6 +143,7 @@ def test_dryrun_summary_surveys_sidecar_fields_not_already_used(tmp_path):
             f"{input_dir}/b.jpg",
             Outcome.UPDATED,
             "mtime, EXIF timestamp",
+            json_path=f"{input_dir}/b.jpg.json",
             sidecar_data={
                 "photoTakenTime": {"timestamp": "200"},
                 "description": "",
@@ -121,6 +166,62 @@ def test_dryrun_summary_surveys_sidecar_fields_not_already_used(tmp_path):
     assert "| `favorited` | 2/2 | 1 |  |" in text
     # people only appears once but is meaningful.
     assert "| `people` | 1/2 | 1 |  |" in text
+
+
+def test_dryrun_summary_expectation_checks_clean_when_shapes_match(tmp_path):
+    input_dir = str(tmp_path)
+    results = [
+        FileResult(
+            f"{input_dir}/a.jpg",
+            Outcome.UPDATED,
+            "mtime, EXIF timestamp",
+            json_path=f"{input_dir}/a.jpg.json",
+            sidecar_data={"photoTakenTime": {"timestamp": "100"}},
+        ),
+    ]
+    report_path = f"{input_dir}/report.md"
+
+    write_dryrun_summary(results, report_path, input_dir)
+    text = open(report_path).read()
+
+    assert "## Sidecar expectation checks" in text
+    assert "No shape anomalies found" in text
+
+
+def test_dryrun_summary_expectation_checks_flag_schema_drift(tmp_path):
+    input_dir = str(tmp_path)
+    results = [
+        FileResult(
+            f"{input_dir}/a.jpg",
+            Outcome.UPDATED,
+            "mtime",
+            json_path=f"{input_dir}/AlbumA/a.jpg.json",
+            sidecar_data={"photoTakenTime": {"time-stamp": "100"}},
+        ),
+        FileResult(
+            f"{input_dir}/b.jpg",
+            Outcome.UPDATED,
+            "mtime",
+            json_path=f"{input_dir}/AlbumB/b.jpg.json",
+            sidecar_data={
+                "photoTakenTime": {"timestamp": "200"},
+                "geoDataExif": {"lat": 1.0, "lon": 2.0},
+            },
+        ),
+    ]
+    report_path = f"{input_dir}/report.md"
+
+    write_dryrun_summary(results, report_path, input_dir)
+    text = open(report_path).read()
+
+    assert "**Timestamp shape issues:**" in text
+    assert "no `timestamp` key" in text
+    assert "time-stamp" in text
+    assert "AlbumA/a.jpg.json" in text
+
+    assert "**GPS shape issues:**" in text
+    assert "geoDataExif" in text
+    assert "AlbumB/b.jpg.json" in text
 
 
 def test_dryrun_summary_omits_sections_with_nothing_to_report(tmp_path):

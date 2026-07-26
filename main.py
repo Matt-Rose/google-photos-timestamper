@@ -324,6 +324,8 @@ def process_file(path: str, dry_run: bool = False) -> FileResult:
     dry_run=True computes and reports what would happen but never calls
     os.utime() or write_exif_tags(), so no file is modified.
     """
+    json_data = None
+    json_path = None
     try:
         exif = read_exif_tags(path)
         exif_dt = parse_exif_datetime(exif.get("DateTimeOriginal"))
@@ -343,15 +345,15 @@ def process_file(path: str, dry_run: bool = False) -> FileResult:
                 os.utime(path, (exif_dt.timestamp(), exif_dt.timestamp()))
             # Still locate the sidecar so organise_files can move it to sidecars/.
             try:
-                sidecar_data, json_path = get_json_path_and_data(path)
+                json_data, json_path = get_json_path_and_data(path)
             except NoJsonFileFoundError:
-                sidecar_data, json_path = None, None
+                pass
             return FileResult(
                 path,
                 Outcome.GOOD_EXIF,
                 "mtime synced from existing EXIF",
                 json_path,
-                sidecar_data=sidecar_data,
+                sidecar_data=json_data,
             )
 
         # Try to find the JSON sidecar.
@@ -369,6 +371,10 @@ def process_file(path: str, dry_run: bool = False) -> FileResult:
                     "good EXIF timestamp (no GPS in sidecar); mtime synced",
                 )
             return FileResult(path, Outcome.NO_JSON)
+
+        ts_anomaly = _describe_timestamp_anomaly(json_data)
+        if ts_anomaly:
+            raise ValueError(f"sidecar timestamp shape unexpected: {ts_anomaly}")
 
         json_ts = float(json_data["photoTakenTime"]["timestamp"])
 
@@ -433,7 +439,13 @@ def process_file(path: str, dry_run: bool = False) -> FileResult:
         )
 
     except Exception as e:
-        return FileResult(path, Outcome.ERROR, error=str(e))
+        return FileResult(
+            path,
+            Outcome.ERROR,
+            error=str(e),
+            json_path=json_path,
+            sidecar_data=json_data,
+        )
 
 
 # ── File organisation ──────────────────────────────────────────────────────────
@@ -621,6 +633,49 @@ def _is_meaningful(value) -> bool:
 _HANDLED_SIDECAR_KEYS = {"photoTakenTime", "geoData", "geoDataExif"}
 
 
+def _describe_timestamp_anomaly(data: dict) -> Optional[str]:
+    """None if data["photoTakenTime"]["timestamp"] is shaped as expected,
+    otherwise a description of how it deviates."""
+    ptt = data.get("photoTakenTime")
+    if ptt is None:
+        keys = ", ".join(sorted(data.keys())) or "(none)"
+        return f"no `photoTakenTime` key at all — sidecar's top-level keys: {keys}"
+    if not isinstance(ptt, dict):
+        return f"`photoTakenTime` is a {type(ptt).__name__}, not an object"
+    if "timestamp" not in ptt:
+        keys = ", ".join(sorted(ptt.keys())) or "(none)"
+        return f"`photoTakenTime` has no `timestamp` key — found instead: {keys}"
+    try:
+        float(ptt["timestamp"])
+    except (TypeError, ValueError):
+        return "`photoTakenTime.timestamp` isn't a number"
+    return None
+
+
+def _describe_geo_anomaly(data: dict) -> Optional[str]:
+    """None if any geoData/geoDataExif block present is shaped as expected
+    (a missing block entirely is normal -- not every photo has a location).
+    """
+    for block_key in ("geoDataExif", "geoData"):
+        block = data.get(block_key)
+        if block is None:
+            continue
+        if not isinstance(block, dict):
+            return f"`{block_key}` is a {type(block).__name__}, not an object"
+        missing = [k for k in ("latitude", "longitude") if k not in block]
+        if missing:
+            keys = ", ".join(sorted(block.keys())) or "(none)"
+            return (
+                f"`{block_key}` has no {'/'.join(missing)} — found instead: {keys}"
+            )
+        try:
+            float(block["latitude"])
+            float(block["longitude"])
+        except (TypeError, ValueError):
+            return f"`{block_key}.latitude`/`longitude` aren't numbers"
+    return None
+
+
 def write_dryrun_summary(results: list, report_path: str, input_dir: str) -> None:
     """Aggregated dry-run report: patterns and counts, not one line per file.
 
@@ -735,7 +790,59 @@ def write_dryrun_summary(results: list, report_path: str, input_dir: str) -> Non
                 lines.append(f"    - … and {len(group) - len(examples)} more")
         lines.append("")
 
-    sidecars = [r.sidecar_data for r in results if r.sidecar_data]
+    sidecar_results = [r for r in results if r.sidecar_data]
+
+    if sidecar_results:
+        def rel_json(r) -> str:  # noqa: E306
+            return os.path.relpath(r.json_path or r.path, input_dir)
+
+        ts_anomalies: dict = {}
+        geo_anomalies: dict = {}
+        for r in sidecar_results:
+            ts_issue = _describe_timestamp_anomaly(r.sidecar_data)
+            if ts_issue:
+                ts_anomalies.setdefault(ts_issue, []).append(r)
+            geo_issue = _describe_geo_anomaly(r.sidecar_data)
+            if geo_issue:
+                geo_anomalies.setdefault(geo_issue, []).append(r)
+
+        lines += [
+            "## Sidecar expectation checks",
+            "",
+            f"Checked {len(sidecar_results)} sidecars against what this script "
+            "assumes: a `photoTakenTime.timestamp` field, and — if a location "
+            "block is present at all — numeric `latitude`/`longitude` inside "
+            "`geoData`/`geoDataExif`. This is how a schema difference (a "
+            "renamed or restructured field in some sidecars) would show up.",
+            "",
+        ]
+        if not ts_anomalies and not geo_anomalies:
+            lines.append(
+                "No shape anomalies found — every sidecar matched what this "
+                "script expects."
+            )
+            lines.append("")
+        else:
+            for heading, anomalies in (
+                ("Timestamp", ts_anomalies),
+                ("GPS", geo_anomalies),
+            ):
+                if not anomalies:
+                    continue
+                lines.append(f"**{heading} shape issues:**")
+                lines.append("")
+                for issue, group in sorted(
+                    anomalies.items(), key=lambda kv: len(kv[1]), reverse=True
+                ):
+                    lines.append(f"- **{len(group)}×** {issue}")
+                    examples = sorted(rel_json(r) for r in group)[:5]
+                    for ex in examples:
+                        lines.append(f"    - `{ex}`")
+                    if len(group) > len(examples):
+                        lines.append(f"    - … and {len(group) - len(examples)} more")
+                lines.append("")
+
+    sidecars = [r.sidecar_data for r in sidecar_results]
     if sidecars:
         field_counts: dict = {}
         field_meaningful: dict = {}
