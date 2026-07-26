@@ -98,3 +98,22 @@ def test_main_dry_run_with_sample_processes_a_subset(
     # Every original file must still be present and untouched, sampled or not.
     for i in range(20):
         assert (input_dir / f"photo{i}.jpg").exists()
+
+
+def test_main_dry_run_report_surveys_sidecar_fields(tmp_path, sample_jpg, monkeypatch):
+    input_dir = tmp_path / "input"
+    photo = sample_jpg(str(input_dir), "photo.jpg")
+    write_sidecar(
+        photo + ".json",
+        OLD_TIMESTAMP,
+        extra={"description": "A lovely sunset", "favorited": True},
+    )
+
+    monkeypatch.setattr("sys.argv", ["main.py", str(input_dir), "--dry-run"])
+    main_module.main()
+
+    text = (input_dir / "timestamper_dryrun_report.md").read_text()
+    assert "## Sidecar fields seen" in text
+    assert "`photoTakenTime`" in text and "| yes |" in text
+    assert "`description`" in text
+    assert "`favorited`" in text

@@ -36,7 +36,7 @@ def sample_mov(tmp_path):
     return _make
 
 
-def write_sidecar(path, timestamp, lat=None, lon=None, alt=None):
+def write_sidecar(path, timestamp, lat=None, lon=None, alt=None, extra=None):
     """Write a minimal Google-Takeout-style JSON sidecar at `path`."""
     data = {"photoTakenTime": {"timestamp": str(timestamp)}}
     if lat is not None and lon is not None:
@@ -45,5 +45,7 @@ def write_sidecar(path, timestamp, lat=None, lon=None, alt=None):
             "longitude": lon,
             "altitude": alt if alt is not None else 0.0,
         }
+    if extra:
+        data.update(extra)
     with open(path, "w") as f:
         json.dump(data, f)

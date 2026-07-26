@@ -38,6 +38,7 @@ class FileResult:
     notes: str = ""
     json_path: Optional[str] = None  # resolved sidecar path, if one was used
     error: Optional[str] = None
+    sidecar_data: Optional[dict] = None  # parsed JSON sidecar, if one was read
 
 
 # ── Exceptions ─────────────────────────────────────────────────────────────────
@@ -342,11 +343,15 @@ def process_file(path: str, dry_run: bool = False) -> FileResult:
                 os.utime(path, (exif_dt.timestamp(), exif_dt.timestamp()))
             # Still locate the sidecar so organise_files can move it to sidecars/.
             try:
-                _, json_path = get_json_path_and_data(path)
+                sidecar_data, json_path = get_json_path_and_data(path)
             except NoJsonFileFoundError:
-                json_path = None
+                sidecar_data, json_path = None, None
             return FileResult(
-                path, Outcome.GOOD_EXIF, "mtime synced from existing EXIF", json_path
+                path,
+                Outcome.GOOD_EXIF,
+                "mtime synced from existing EXIF",
+                json_path,
+                sidecar_data=sidecar_data,
             )
 
         # Try to find the JSON sidecar.
@@ -419,7 +424,13 @@ def process_file(path: str, dry_run: bool = False) -> FileResult:
         if not dry_run:
             os.utime(path, (mtime_ts, mtime_ts))
 
-        return FileResult(path, Outcome.UPDATED, ", ".join(note_parts), json_path)
+        return FileResult(
+            path,
+            Outcome.UPDATED,
+            ", ".join(note_parts),
+            json_path,
+            sidecar_data=json_data,
+        )
 
     except Exception as e:
         return FileResult(path, Outcome.ERROR, error=str(e))
@@ -523,9 +534,7 @@ def organise_files(
 # ── Markdown report ────────────────────────────────────────────────────────────
 
 
-def write_report(
-    results: list, report_path: str, input_dir: str, dry_run: bool = False
-) -> None:
+def write_report(results: list, report_path: str, input_dir: str) -> None:
     updated = [r for r in results if r.outcome == Outcome.UPDATED]
     good_exif = [r for r in results if r.outcome == Outcome.GOOD_EXIF]
     no_json = [r for r in results if r.outcome == Outcome.NO_JSON]
@@ -537,14 +546,6 @@ def write_report(
         "# Google Photos Timestamper Report",
         f"Generated: {now}",
         "",
-    ]
-    if dry_run:
-        lines += [
-            "**DRY RUN — no files were modified, renamed, or moved.** "
-            "The table below shows what *would* happen on a real run.",
-            "",
-        ]
-    lines += [
         "## Summary",
         "",
         "| Outcome | Count |",
@@ -587,6 +588,189 @@ def write_report(
                 .replace("\n", " ")
             )
             lines.append(f"| `{rel(r)}` | {err} |")
+        lines.append("")
+
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+    print(f"Report written → {report_path}")
+
+
+# ── Dry-run summary report ──────────────────────────────────────────────────────
+
+
+def _file_ext(path: str) -> str:
+    ext = os.path.splitext(path)[1].lower()
+    return ext if ext else "(no extension)"
+
+
+def _is_meaningful(value) -> bool:
+    """Heuristic for whether a sidecar field value carries real information."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (str, list, dict, tuple, set)):
+        return len(value) > 0
+    if isinstance(value, (int, float)):
+        return value != 0
+    return True
+
+
+# Sidecar keys this script already reads and acts on.
+_HANDLED_SIDECAR_KEYS = {"photoTakenTime", "geoData", "geoDataExif"}
+
+
+def write_dryrun_summary(results: list, report_path: str, input_dir: str) -> None:
+    """Aggregated dry-run report: patterns and counts, not one line per file.
+
+    Built to answer two questions even across a huge library: are failures
+    clustered around a particular cause (a file type, a sidecar-matching
+    gap, a recurring exception), and is there sidecar data this script
+    isn't preserving yet that shows up often enough to be worth adding.
+    """
+    updated = [r for r in results if r.outcome == Outcome.UPDATED]
+    good_exif = [r for r in results if r.outcome == Outcome.GOOD_EXIF]
+    no_json = [r for r in results if r.outcome == Outcome.NO_JSON]
+    errors = [r for r in results if r.outcome == Outcome.ERROR]
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def rel(r) -> str:  # noqa: E306
+        return os.path.relpath(r.path, input_dir)
+
+    lines = [
+        "# Google Photos Timestamper — Dry Run Summary",
+        f"Generated: {now}",
+        "",
+        "**DRY RUN — no files were modified, renamed, or moved.** This report "
+        "is aggregated by pattern rather than listed file-by-file, so it "
+        "stays readable no matter how large the library is.",
+        "",
+        "## Summary",
+        "",
+        "| Outcome | Count |",
+        "|---------|-------|",
+        f"| Would update (EXIF/mtime from JSON) | {len(updated)} |",
+        f"| Good EXIF already (no change needed) | {len(good_exif)} |",
+        f"| No JSON sidecar found | {len(no_json)} |",
+        f"| Errors | {len(errors)} |",
+        f"| **Total** | **{len(results)}** |",
+        "",
+    ]
+
+    if updated:
+        n_ts = sum(1 for r in updated if "EXIF timestamp" in r.notes)
+        n_gps = sum(1 for r in updated if "EXIF GPS" in r.notes)
+        n_both = sum(
+            1
+            for r in updated
+            if "EXIF timestamp" in r.notes and "EXIF GPS" in r.notes
+        )
+        lines += [
+            "## What would change",
+            "",
+            "| Change | Files |",
+            "|--------|-------|",
+            f"| Timestamp only | {n_ts - n_both} |",
+            f"| GPS only | {n_gps - n_both} |",
+            f"| Timestamp + GPS | {n_both} |",
+            "",
+        ]
+
+    by_ext: dict = {}
+    for r in results:
+        counts = by_ext.setdefault(
+            _file_ext(r.path),
+            {"updated": 0, "good_exif": 0, "no_json": 0, "error": 0},
+        )
+        counts[r.outcome.value] += 1
+
+    if by_ext:
+        lines += [
+            "## By file type",
+            "",
+            "| Extension | Would update | Good EXIF | No JSON | Errors | Total |",
+            "|-----------|--------------|-----------|---------|--------|-------|",
+        ]
+        for ext, counts in sorted(
+            by_ext.items(), key=lambda kv: sum(kv[1].values()), reverse=True
+        ):
+            total = sum(counts.values())
+            lines.append(
+                f"| `{ext}` | {counts['updated']} | {counts['good_exif']} | "
+                f"{counts['no_json']} | {counts['error']} | {total} |"
+            )
+        lines.append("")
+
+    if no_json:
+        lines += ["## No JSON sidecar found — by file type", ""]
+        by_ext_group: dict = {}
+        for r in no_json:
+            by_ext_group.setdefault(_file_ext(r.path), []).append(r)
+        for ext, group in sorted(
+            by_ext_group.items(), key=lambda kv: len(kv[1]), reverse=True
+        ):
+            lines.append(f"- `{ext}`: {len(group)} files")
+            examples = sorted(rel(r) for r in group)[:5]
+            for ex in examples:
+                lines.append(f"    - `{ex}`")
+            if len(group) > len(examples):
+                lines.append(f"    - … and {len(group) - len(examples)} more")
+        lines.append("")
+
+    if errors:
+        lines += ["## Errors — grouped by message", ""]
+        by_message: dict = {}
+        for r in errors:
+            by_message.setdefault(r.error or "unknown error", []).append(r)
+        for msg, group in sorted(
+            by_message.items(), key=lambda kv: len(kv[1]), reverse=True
+        ):
+            lines.append(f"- **{len(group)}×** {msg}")
+            examples = sorted(rel(r) for r in group)[:5]
+            for ex in examples:
+                lines.append(f"    - `{ex}`")
+            if len(group) > len(examples):
+                lines.append(f"    - … and {len(group) - len(examples)} more")
+        lines.append("")
+
+    sidecars = [r.sidecar_data for r in results if r.sidecar_data]
+    if sidecars:
+        field_counts: dict = {}
+        field_meaningful: dict = {}
+        for data in sidecars:
+            for key, value in data.items():
+                field_counts[key] = field_counts.get(key, 0) + 1
+                if _is_meaningful(value):
+                    field_meaningful[key] = field_meaningful.get(key, 0) + 1
+
+        lines += [
+            "## Sidecar fields seen",
+            "",
+            f"Surveyed {len(sidecars)} JSON sidecars actually matched during "
+            "this run (only a sample if `--sample` was used). "
+            "`photoTakenTime`/`geoData`/`geoDataExif` are already used by "
+            "this script; everything else is currently ignored — a field "
+            "that shows up often here with meaningful values might be worth "
+            "preserving too (e.g. as an EXIF/XMP tag).",
+            "",
+            "| Field | Present | Non-empty/true | Already used |",
+            "|-------|---------|-----------------|---------------|",
+        ]
+        top_fields = sorted(
+            field_counts.items(), key=lambda kv: kv[1], reverse=True
+        )[:25]
+        for key, count in top_fields:
+            meaningful = field_meaningful.get(key, 0)
+            used = "yes" if key in _HANDLED_SIDECAR_KEYS else ""
+            lines.append(f"| `{key}` | {count}/{len(sidecars)} | {meaningful} | {used} |")
+        if len(field_counts) > len(top_fields):
+            lines.append("")
+            lines.append(
+                f"_{len(field_counts) - len(top_fields)} further rarely-seen "
+                "fields omitted._"
+            )
         lines.append("")
 
     with open(report_path, "w", encoding="utf-8") as f:
@@ -679,7 +863,10 @@ def main() -> None:
 
     print()
 
-    write_report(results, report_path, input_dir, dry_run=args.dry_run)
+    if args.dry_run:
+        write_dryrun_summary(results, report_path, input_dir)
+    else:
+        write_report(results, report_path, input_dir)
 
     n_good = sum(
         1 for r in results if r.outcome in (Outcome.UPDATED, Outcome.GOOD_EXIF)
