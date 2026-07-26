@@ -1,5 +1,7 @@
+import argparse
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -315,7 +317,12 @@ def write_exif_tags(
 # ── Per-file processing ────────────────────────────────────────────────────────
 
 
-def process_file(path: str) -> FileResult:
+def process_file(path: str, dry_run: bool = False) -> FileResult:
+    """Process a single file.
+
+    dry_run=True computes and reports what would happen but never calls
+    os.utime() or write_exif_tags(), so no file is modified.
+    """
     try:
         exif = read_exif_tags(path)
         exif_dt = parse_exif_datetime(exif.get("DateTimeOriginal"))
@@ -331,7 +338,8 @@ def process_file(path: str) -> FileResult:
         # If EXIF already looks good, sync mtime and move on.
         if ts_good and gps_good:
             assert exif_dt is not None  # guaranteed by ts_good
-            os.utime(path, (exif_dt.timestamp(), exif_dt.timestamp()))
+            if not dry_run:
+                os.utime(path, (exif_dt.timestamp(), exif_dt.timestamp()))
             # Still locate the sidecar so organise_files can move it to sidecars/.
             try:
                 _, json_path = get_json_path_and_data(path)
@@ -348,7 +356,8 @@ def process_file(path: str) -> FileResult:
             if ts_good:
                 # Good timestamp but no GPS — still usable; sync mtime.
                 assert exif_dt is not None  # guaranteed by ts_good
-                os.utime(path, (exif_dt.timestamp(), exif_dt.timestamp()))
+                if not dry_run:
+                    os.utime(path, (exif_dt.timestamp(), exif_dt.timestamp()))
                 return FileResult(
                     path,
                     Outcome.GOOD_EXIF,
@@ -379,29 +388,36 @@ def process_file(path: str) -> FileResult:
         write_gps = not gps_good and lat is not None
 
         if write_ts or write_gps:
-            try:
-                write_exif_tags(
-                    path,
-                    json_ts if write_ts else None,
-                    lat   if write_gps else None,
-                    lon   if write_gps else None,
-                    alt   if write_gps else None,
-                )
+            if dry_run:
                 if write_ts:
                     note_parts.append("EXIF timestamp")
                 if write_gps:
                     note_parts.append("EXIF GPS")
-            except subprocess.CalledProcessError as e:
-                stderr = (e.stderr or b"").decode().strip().splitlines()
-                detail = stderr[-1] if stderr else "unknown error"
-                note_parts.append(f"EXIF write failed ({detail})")
-            except subprocess.TimeoutExpired:
-                note_parts.append("EXIF write timed out")
+            else:
+                try:
+                    write_exif_tags(
+                        path,
+                        json_ts if write_ts else None,
+                        lat   if write_gps else None,
+                        lon   if write_gps else None,
+                        alt   if write_gps else None,
+                    )
+                    if write_ts:
+                        note_parts.append("EXIF timestamp")
+                    if write_gps:
+                        note_parts.append("EXIF GPS")
+                except subprocess.CalledProcessError as e:
+                    stderr = (e.stderr or b"").decode().strip().splitlines()
+                    detail = stderr[-1] if stderr else "unknown error"
+                    note_parts.append(f"EXIF write failed ({detail})")
+                except subprocess.TimeoutExpired:
+                    note_parts.append("EXIF write timed out")
 
         # Set mtime last: exiftool -overwrite_original rewrites the file on
         # any write, resetting its mtime to "now" -- so this must run after
         # write_exif_tags, not before, or the mtime ends up wrong.
-        os.utime(path, (mtime_ts, mtime_ts))
+        if not dry_run:
+            os.utime(path, (mtime_ts, mtime_ts))
 
         return FileResult(path, Outcome.UPDATED, ", ".join(note_parts), json_path)
 
@@ -507,7 +523,9 @@ def organise_files(
 # ── Markdown report ────────────────────────────────────────────────────────────
 
 
-def write_report(results: list, report_path: str, input_dir: str) -> None:
+def write_report(
+    results: list, report_path: str, input_dir: str, dry_run: bool = False
+) -> None:
     updated = [r for r in results if r.outcome == Outcome.UPDATED]
     good_exif = [r for r in results if r.outcome == Outcome.GOOD_EXIF]
     no_json = [r for r in results if r.outcome == Outcome.NO_JSON]
@@ -519,6 +537,14 @@ def write_report(results: list, report_path: str, input_dir: str) -> None:
         "# Google Photos Timestamper Report",
         f"Generated: {now}",
         "",
+    ]
+    if dry_run:
+        lines += [
+            "**DRY RUN — no files were modified, renamed, or moved.** "
+            "The table below shows what *would* happen on a real run.",
+            "",
+        ]
+    lines += [
         "## Summary",
         "",
         "| Outcome | Count |",
@@ -579,18 +605,31 @@ ICONS = {
 }
 
 
-def main() -> None:
-    if not shutil.which("exiftool"):
-        sys.exit("exiftool is required.  Install with: brew install exiftool")
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Restore EXIF timestamps/GPS from Google Takeout JSON sidecars."
+    )
+    parser.add_argument("directory", help="Path to the Takeout export to process")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would happen without modifying, moving, or renaming "
+        "any files",
+    )
+    parser.add_argument(
+        "--sample",
+        type=float,
+        default=None,
+        metavar="PERCENT",
+        help="Only process a random PERCENT of matched files. Requires "
+        "--dry-run; useful for a fast preview before running on a large "
+        "library",
+    )
+    return parser
 
-    if len(sys.argv) < 2:
-        sys.exit("Usage: python main.py <directory>")
 
-    input_dir = sys.argv[1]
-    report_path = os.path.join(input_dir, "timestamper_report.md")
-
-    results: list = []
-
+def find_input_files(input_dir: str) -> list:
+    file_paths = []
     for dirpath, dirnames, filenames in os.walk(input_dir, topdown=True):
         dirnames[:] = [d for d in dirnames if d not in OUTPUT_DIRS]
         for filename in filenames:
@@ -600,25 +639,63 @@ def main() -> None:
                 or filename.endswith(".md")
             ):
                 continue
-            file_path = os.path.join(dirpath, filename)
-            result = process_file(file_path)
-            results.append(result)
-            detail = result.notes or result.error or result.outcome.value
-            print(f"  {ICONS[result.outcome]}  {filename}  —  {detail}")
+            file_paths.append(os.path.join(dirpath, filename))
+    return file_paths
+
+
+def main() -> None:
+    if not shutil.which("exiftool"):
+        sys.exit("exiftool is required.  Install with: brew install exiftool")
+
+    args = build_arg_parser().parse_args()
+
+    if args.sample is not None:
+        if not args.dry_run:
+            sys.exit("--sample can only be used together with --dry-run")
+        if not 0 < args.sample <= 100:
+            sys.exit("--sample must be greater than 0 and at most 100")
+
+    input_dir = args.directory
+    report_name = (
+        "timestamper_dryrun_report.md" if args.dry_run else "timestamper_report.md"
+    )
+    report_path = os.path.join(input_dir, report_name)
+
+    file_paths = find_input_files(input_dir)
+
+    if args.sample is not None:
+        sample_size = max(1, round(len(file_paths) * args.sample / 100))
+        sample_size = min(sample_size, len(file_paths))
+        file_paths = random.sample(file_paths, sample_size)
+        print(f"Sampling {sample_size} of the matched files ({args.sample:g}%)\n")
+
+    results: list = []
+
+    for file_path in file_paths:
+        result = process_file(file_path, dry_run=args.dry_run)
+        results.append(result)
+        detail = result.notes or result.error or result.outcome.value
+        print(f"  {ICONS[result.outcome]}  {os.path.basename(file_path)}  —  {detail}")
 
     print()
 
-    write_report(results, report_path, input_dir)
-    organise_files(input_dir, results, report_path)
+    write_report(results, report_path, input_dir, dry_run=args.dry_run)
 
     n_good = sum(
         1 for r in results if r.outcome in (Outcome.UPDATED, Outcome.GOOD_EXIF)
     )
     n_bad = sum(1 for r in results if r.outcome in (Outcome.NO_JSON, Outcome.ERROR))
 
-    print(f"\n→ ready/  {n_good} files")
-    print("→ sidecars/   matched JSON sidecars")
-    print(f"→ problems/   {n_bad} files")
+    if args.dry_run:
+        print("\nDry run only — no files were modified, renamed, or moved.")
+        print(f"→ would move to ready/     {n_good} files")
+        print("→ would move to sidecars/  matched JSON sidecars")
+        print(f"→ would move to problems/  {n_bad} files")
+    else:
+        organise_files(input_dir, results, report_path)
+        print(f"\n→ ready/  {n_good} files")
+        print("→ sidecars/   matched JSON sidecars")
+        print(f"→ problems/   {n_bad} files")
 
 
 if __name__ == "__main__":
