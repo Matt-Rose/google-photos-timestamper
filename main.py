@@ -19,12 +19,6 @@ RECENT_DAYS = 5
 OUTPUT_DIRS = {"ready", "sidecars", "problems"}
 
 
-# ── Startup check ──────────────────────────────────────────────────────────────
-
-if not shutil.which("exiftool"):
-    sys.exit("exiftool is required.  Install with: brew install exiftool")
-
-
 # ── Data structures ────────────────────────────────────────────────────────────
 
 
@@ -556,12 +550,6 @@ def write_report(results: list, report_path: str, input_dir: str) -> None:
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-if len(sys.argv) < 2:
-    sys.exit("Usage: python main.py <directory>")
-
-input_dir = sys.argv[1]
-report_path = os.path.join(input_dir, "timestamper_report.md")
-
 ICONS = {
     Outcome.UPDATED: "✓",
     Outcome.GOOD_EXIF: "~",
@@ -569,31 +557,48 @@ ICONS = {
     Outcome.ERROR: "✗",
 }
 
-results: list = []
 
-for dirpath, dirnames, filenames in os.walk(input_dir, topdown=True):
-    dirnames[:] = [d for d in dirnames if d not in OUTPUT_DIRS]
-    for filename in filenames:
-        if (
-            filename.endswith(".json")
-            or filename == ".DS_Store"
-            or filename.endswith(".md")
-        ):
-            continue
-        file_path = os.path.join(dirpath, filename)
-        result = process_file(file_path)
-        results.append(result)
-        detail = result.notes or result.error or result.outcome.value
-        print(f"  {ICONS[result.outcome]}  {filename}  —  {detail}")
+def main() -> None:
+    if not shutil.which("exiftool"):
+        sys.exit("exiftool is required.  Install with: brew install exiftool")
 
-print()
+    if len(sys.argv) < 2:
+        sys.exit("Usage: python main.py <directory>")
 
-write_report(results, report_path, input_dir)
-organise_files(input_dir, results, report_path)
+    input_dir = sys.argv[1]
+    report_path = os.path.join(input_dir, "timestamper_report.md")
 
-n_good = sum(1 for r in results if r.outcome in (Outcome.UPDATED, Outcome.GOOD_EXIF))
-n_bad = sum(1 for r in results if r.outcome in (Outcome.NO_JSON, Outcome.ERROR))
+    results: list = []
 
-print(f"\n→ ready/  {n_good} files")
-print("→ sidecars/   matched JSON sidecars")
-print(f"→ problems/   {n_bad} files")
+    for dirpath, dirnames, filenames in os.walk(input_dir, topdown=True):
+        dirnames[:] = [d for d in dirnames if d not in OUTPUT_DIRS]
+        for filename in filenames:
+            if (
+                filename.endswith(".json")
+                or filename == ".DS_Store"
+                or filename.endswith(".md")
+            ):
+                continue
+            file_path = os.path.join(dirpath, filename)
+            result = process_file(file_path)
+            results.append(result)
+            detail = result.notes or result.error or result.outcome.value
+            print(f"  {ICONS[result.outcome]}  {filename}  —  {detail}")
+
+    print()
+
+    write_report(results, report_path, input_dir)
+    organise_files(input_dir, results, report_path)
+
+    n_good = sum(
+        1 for r in results if r.outcome in (Outcome.UPDATED, Outcome.GOOD_EXIF)
+    )
+    n_bad = sum(1 for r in results if r.outcome in (Outcome.NO_JSON, Outcome.ERROR))
+
+    print(f"\n→ ready/  {n_good} files")
+    print("→ sidecars/   matched JSON sidecars")
+    print(f"→ problems/   {n_bad} files")
+
+
+if __name__ == "__main__":
+    main()

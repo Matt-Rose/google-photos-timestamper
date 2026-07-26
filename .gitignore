@@ -1,2 +1,4 @@
 .idea
 google_photos_timestamper.egg-info
+__pycache__
+.pytest_cache

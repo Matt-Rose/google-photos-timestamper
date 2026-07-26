@@ -18,10 +18,23 @@ platforms = ["osx-arm64", "osx-64", "linux-64"]
 
 [tool.pixi.tasks]
 run = "python main.py"
+test = "pytest test/unit"
+test-all = "pytest"
 
 [tool.pixi.dependencies]
 python = ">=3.14"
 pip = "*"
+exiftool = "*"
 
 [tool.pixi.pypi-dependencies]
 google-photos-timestamper = { path = ".", editable = true }
+
+[tool.pixi.feature.dev.pypi-dependencies]
+pytest = "*"
+
+[tool.pixi.environments]
+default = ["dev"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+addopts = "-q"
