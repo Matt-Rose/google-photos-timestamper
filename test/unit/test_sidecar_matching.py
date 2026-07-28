@@ -136,6 +136,22 @@ def test_live_photo_sibling_extensionless_video_variant(tmp_path):
     assert path == str(tmp_path / "IMG_8326.HEIC.supplemental-metadata.json")
 
 
+def test_live_photo_sibling_mp_original_variant(tmp_path):
+    # Google's "original" (pre-edit) Motion Photo video component, named
+    # "X.MP_Original", paired with "X.MP_Original.JPG" which has the sidecar.
+    video = tmp_path / "PXL_20230409_101528421.MP_Original"
+    photo = tmp_path / "PXL_20230409_101528421.MP_Original.JPG"
+    sidecar = tmp_path / "PXL_20230409_101528421.MP_Original.JPG.supplemental-metadata.json"
+    video.write_bytes(b"x")
+    photo.write_bytes(b"x")
+    sidecar.write_text(json.dumps({"photoTakenTime": {"timestamp": "950"}}))
+
+    data, path = get_json_path_and_data(str(video))
+
+    assert data["photoTakenTime"]["timestamp"] == "950"
+    assert path == str(sidecar)
+
+
 def test_live_photo_sibling_iphone_pattern(tmp_path):
     (tmp_path / "IMG_6375.HEIC").write_bytes(b"x")
     (tmp_path / "IMG_6375.MP4").write_bytes(b"x")
