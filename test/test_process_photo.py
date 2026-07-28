@@ -35,6 +35,7 @@ def test_process_file_writes_exif_and_mtime_from_sidecar(sample_jpg):
 
     assert result.outcome == Outcome.UPDATED
     assert result.json_path == photo + ".json"
+    assert result.assigned_timestamp == OLD_TIMESTAMP
 
     tags = _read_tags(photo, "DateTimeOriginal", "GPSLatitude", "GPSLongitude")
     assert tags["DateTimeOriginal"] == "2020:01:15 10:30:00"

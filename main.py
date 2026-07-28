@@ -39,6 +39,7 @@ class FileResult:
     json_path: Optional[str] = None  # resolved sidecar path, if one was used
     error: Optional[str] = None
     sidecar_data: Optional[dict] = None  # parsed JSON sidecar, if one was read
+    assigned_timestamp: Optional[float] = None  # epoch mtime this file was/would be given
 
 
 # ── Exceptions ─────────────────────────────────────────────────────────────────
@@ -354,6 +355,7 @@ def process_file(path: str, dry_run: bool = False) -> FileResult:
                 "mtime synced from existing EXIF",
                 json_path,
                 sidecar_data=json_data,
+                assigned_timestamp=exif_dt.timestamp(),
             )
 
         # Try to find the JSON sidecar.
@@ -369,6 +371,7 @@ def process_file(path: str, dry_run: bool = False) -> FileResult:
                     path,
                     Outcome.GOOD_EXIF,
                     "good EXIF timestamp (no GPS in sidecar); mtime synced",
+                    assigned_timestamp=exif_dt.timestamp(),
                 )
             return FileResult(path, Outcome.NO_JSON)
 
@@ -436,6 +439,7 @@ def process_file(path: str, dry_run: bool = False) -> FileResult:
             ", ".join(note_parts),
             json_path,
             sidecar_data=json_data,
+            assigned_timestamp=mtime_ts,
         )
 
     except Exception as e:
@@ -676,6 +680,21 @@ def _describe_geo_anomaly(data: dict) -> Optional[str]:
     return None
 
 
+_PHOTOS_FROM_YEAR_RE = re.compile(r"^Photos from (\d{4})$", re.IGNORECASE)
+
+
+def _photos_from_year(path: str) -> Optional[int]:
+    """Year embedded in an enclosing "Photos from YYYY" directory name, if any.
+
+    Google assigns this year itself, independent of what this script parses
+    out of the JSON sidecar -- a mismatch is a cheap, independent signal of
+    a sidecar-matching bug rather than just unusual-but-correct data.
+    """
+    parent = os.path.basename(os.path.dirname(path))
+    match = _PHOTOS_FROM_YEAR_RE.match(parent)
+    return int(match.group(1)) if match else None
+
+
 def write_dryrun_summary(results: list, report_path: str, input_dir: str) -> None:
     """Aggregated dry-run report: patterns and counts, not one line per file.
 
@@ -841,6 +860,52 @@ def write_dryrun_summary(results: list, report_path: str, input_dir: str) -> Non
                     if len(group) > len(examples):
                         lines.append(f"    - … and {len(group) - len(examples)} more")
                 lines.append("")
+
+    year_checked_in_folder = []
+    year_mismatches: dict = {}
+    for r in results:
+        if r.assigned_timestamp is None:
+            continue
+        folder_year = _photos_from_year(r.path)
+        if folder_year is None:
+            continue
+        year_checked_in_folder.append(r)
+        assigned_year = datetime.fromtimestamp(
+            r.assigned_timestamp, tz=timezone.utc
+        ).year
+        if assigned_year != folder_year:
+            key = f"folder says {folder_year}, assigned timestamp says {assigned_year}"
+            year_mismatches.setdefault(key, []).append(r)
+
+    if year_checked_in_folder:
+        lines += [
+            "## Year-folder cross-check",
+            "",
+            f"Checked {len(year_checked_in_folder)} files inside a `Photos "
+            "from YYYY` folder: does the year in the folder name match the "
+            "year of the timestamp this script is about to assign? Google "
+            "assigned the folder year itself, independent of what this "
+            "script parses from the JSON sidecar -- a mismatch is a strong, "
+            "free signal of a sidecar-matching bug, not just unusual data.",
+            "",
+        ]
+        if not year_mismatches:
+            lines.append(
+                f"No mismatches found across {len(year_checked_in_folder)} "
+                "files checked."
+            )
+            lines.append("")
+        else:
+            for key, group in sorted(
+                year_mismatches.items(), key=lambda kv: len(kv[1]), reverse=True
+            ):
+                lines.append(f"- **{len(group)}×** {key}")
+                examples = sorted(rel(r) for r in group)[:5]
+                for ex in examples:
+                    lines.append(f"    - `{ex}`")
+                if len(group) > len(examples):
+                    lines.append(f"    - … and {len(group) - len(examples)} more")
+            lines.append("")
 
     sidecars = [r.sidecar_data for r in sidecar_results]
     if sidecars:

@@ -1,10 +1,17 @@
+from datetime import datetime, timezone
+
 from main import (
     FileResult,
     Outcome,
     _describe_geo_anomaly,
     _describe_timestamp_anomaly,
+    _photos_from_year,
     write_dryrun_summary,
 )
+
+
+def _epoch(year, month=6, day=15):
+    return datetime(year, month, day, tzinfo=timezone.utc).timestamp()
 
 
 def test_describe_timestamp_anomaly_none_for_expected_shape():
@@ -35,6 +42,18 @@ def test_describe_geo_anomaly_none_when_absent():
 def test_describe_geo_anomaly_none_for_expected_shape():
     data = {"geoDataExif": {"latitude": 1.0, "longitude": 2.0}}
     assert _describe_geo_anomaly(data) is None
+
+
+def test_photos_from_year_matches_expected_folder_name():
+    assert _photos_from_year("/x/Photos from 2016/IMG_1.jpg") == 2016
+
+
+def test_photos_from_year_case_insensitive():
+    assert _photos_from_year("/x/photos FROM 2016/IMG_1.jpg") == 2016
+
+
+def test_photos_from_year_none_outside_such_a_folder():
+    assert _photos_from_year("/x/AlbumA/IMG_1.jpg") is None
 
 
 def test_describe_geo_anomaly_flags_renamed_sub_key():
@@ -236,3 +255,66 @@ def test_dryrun_summary_omits_sections_with_nothing_to_report(tmp_path):
     assert "## No JSON sidecar found" not in text
     assert "## Errors" not in text
     assert "## Sidecar fields seen" not in text
+    assert "## Year-folder cross-check" not in text
+
+
+def test_dryrun_summary_year_folder_check_clean_when_years_match(tmp_path):
+    input_dir = str(tmp_path)
+    results = [
+        FileResult(
+            f"{input_dir}/Photos from 2016/a.jpg",
+            Outcome.UPDATED,
+            "mtime, EXIF timestamp",
+            assigned_timestamp=_epoch(2016),
+        ),
+    ]
+    report_path = f"{input_dir}/report.md"
+
+    write_dryrun_summary(results, report_path, input_dir)
+    text = open(report_path).read()
+
+    assert "## Year-folder cross-check" in text
+    assert "No mismatches found across 1 files checked." in text
+
+
+def test_dryrun_summary_year_folder_check_flags_mismatch(tmp_path):
+    input_dir = str(tmp_path)
+    results = [
+        FileResult(
+            f"{input_dir}/Photos from 2016/a.jpg",
+            Outcome.UPDATED,
+            "mtime, EXIF timestamp",
+            assigned_timestamp=_epoch(2003),
+        ),
+        FileResult(
+            f"{input_dir}/AlbumA/b.jpg",  # not in a "Photos from YYYY" folder
+            Outcome.UPDATED,
+            "mtime, EXIF timestamp",
+            assigned_timestamp=_epoch(1999),
+        ),
+    ]
+    report_path = f"{input_dir}/report.md"
+
+    write_dryrun_summary(results, report_path, input_dir)
+    text = open(report_path).read()
+
+    assert "Checked 1 files inside a `Photos from YYYY` folder" in text
+    assert "folder says 2016, assigned timestamp says 2003" in text
+    assert "Photos from 2016/a.jpg" in text
+    # The file outside a year-folder must not be swept into this check.
+    assert "AlbumA/b.jpg" not in text
+
+
+def test_dryrun_summary_year_folder_check_ignores_results_without_a_timestamp(
+    tmp_path,
+):
+    input_dir = str(tmp_path)
+    results = [
+        FileResult(f"{input_dir}/Photos from 2016/a.jpg", Outcome.NO_JSON),
+    ]
+    report_path = f"{input_dir}/report.md"
+
+    write_dryrun_summary(results, report_path, input_dir)
+    text = open(report_path).read()
+
+    assert "## Year-folder cross-check" not in text
