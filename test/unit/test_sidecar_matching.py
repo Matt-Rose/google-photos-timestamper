@@ -120,6 +120,22 @@ def test_get_json_path_and_data_raises_when_nothing_found(tmp_path):
         get_json_path_and_data(str(image))
 
 
+def test_live_photo_sibling_extensionless_video_variant(tmp_path):
+    # Some Live Photo video components are exported with no extension at
+    # all (confirmed via `file` on real examples to still be QuickTime .MOV
+    # content), not just .MP4/.MOV.
+    (tmp_path / "IMG_8326.HEIC").write_bytes(b"x")
+    (tmp_path / "IMG_8326").write_bytes(b"x")
+    (tmp_path / "IMG_8326.HEIC.supplemental-metadata.json").write_text(
+        json.dumps({"photoTakenTime": {"timestamp": "900"}})
+    )
+
+    data, path = get_json_path_and_data(str(tmp_path / "IMG_8326"))
+
+    assert data["photoTakenTime"]["timestamp"] == "900"
+    assert path == str(tmp_path / "IMG_8326.HEIC.supplemental-metadata.json")
+
+
 def test_live_photo_sibling_iphone_pattern(tmp_path):
     (tmp_path / "IMG_6375.HEIC").write_bytes(b"x")
     (tmp_path / "IMG_6375.MP4").write_bytes(b"x")

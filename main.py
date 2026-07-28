@@ -193,7 +193,10 @@ def get_json_path_and_data(image_path: str) -> Tuple[dict, str]:
 
 # Video half of a Live Photo (iPhone) / Motion Photo (Android) pair -- Google
 # Takeout gives the still-image half a sidecar but not the video half.
-_VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".mp", ".3gp", ".avi"}
+# "" (no extension) is included: some Live Photo video components are
+# exported as extensionless files (confirmed via `file` to still be real
+# QuickTime .MOV content).
+_VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".mp", ".3gp", ".avi", ""}
 _LIVE_PHOTO_SIBLING_EXTENSIONS = {".jpg", ".jpeg", ".heic", ".heif", ".png"}
 
 
