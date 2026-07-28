@@ -6,6 +6,7 @@ import pytest
 
 from main import (
     NoJsonFileFoundError,
+    _dedup_supplemental_candidate,
     _find_live_photo_sibling_json,
     _sidecar_candidates,
     get_alike_json,
@@ -175,3 +176,47 @@ def test_live_photo_sibling_skips_sibling_with_no_sidecar_of_its_own(tmp_path):
     (tmp_path / "IMG_2.HEIC").write_bytes(b"x")  # no sidecar for this either
 
     assert _find_live_photo_sibling_json(str(tmp_path / "IMG_2.MOV")) is None
+
+
+def test_dedup_supplemental_candidate_builds_expected_path():
+    candidate = _dedup_supplemental_candidate("IMG_2509(1).JPG", "/dir")
+    assert candidate == "/dir/IMG_2509.JPG.supplemental-metadata(1).json"
+
+
+def test_dedup_supplemental_candidate_none_without_duplicate_suffix():
+    assert _dedup_supplemental_candidate("IMG_2509.JPG", "/dir") is None
+
+
+def test_get_json_path_and_data_matches_new_format_duplicate_naming(tmp_path):
+    # Real-world shape found in Sophia's export: the original and its
+    # duplicate both have "supplemental-metadata" sidecars, but the
+    # duplicate's "(1)" lands after "supplemental-metadata", not in the
+    # same position as on the media filename.
+    (tmp_path / "IMG_2509.JPG").write_bytes(b"x")
+    (tmp_path / "IMG_2509.JPG.supplemental-metadata.json").write_text(
+        json.dumps({"photoTakenTime": {"timestamp": "100"}})
+    )
+    (tmp_path / "IMG_2509(1).JPG").write_bytes(b"x")
+    (tmp_path / "IMG_2509.JPG.supplemental-metadata(1).json").write_text(
+        json.dumps({"photoTakenTime": {"timestamp": "200"}})
+    )
+
+    data, path = get_json_path_and_data(str(tmp_path / "IMG_2509(1).JPG"))
+
+    assert data["photoTakenTime"]["timestamp"] == "200"
+    assert path == str(tmp_path / "IMG_2509.JPG.supplemental-metadata(1).json")
+
+
+def test_live_photo_sibling_resolves_new_format_duplicate_naming(tmp_path):
+    # The video half of a duplicated Live Photo pair: the fallback must
+    # chain through the new-format duplicate-naming fix too.
+    (tmp_path / "IMG_2509(1).JPG").write_bytes(b"x")
+    (tmp_path / "IMG_2509(1).MP4").write_bytes(b"x")
+    (tmp_path / "IMG_2509.JPG.supplemental-metadata(1).json").write_text(
+        json.dumps({"photoTakenTime": {"timestamp": "300"}})
+    )
+
+    data, path = get_json_path_and_data(str(tmp_path / "IMG_2509(1).MP4"))
+
+    assert data["photoTakenTime"]["timestamp"] == "300"
+    assert path == str(tmp_path / "IMG_2509.JPG.supplemental-metadata(1).json")

@@ -120,6 +120,24 @@ def _sidecar_candidates(filename: str, dir_path: str) -> list:
     return candidates
 
 
+_DUP_SUFFIX_RE = re.compile(r"^(.*)\((\d+)\)$")
+
+
+def _dedup_supplemental_candidate(filename: str, dir_path: str) -> Optional[str]:
+    """New-format duplicate sidecar naming: for a duplicate-suffixed media
+    file "X(N).ext", the sidecar is "X.ext.supplemental-metadata(N).json" --
+    the "(N)" moves to just before ".json", *after* "supplemental-metadata".
+    This is a different position than move_duplication_string() produces,
+    which targets the older "X.ext(N).json" naming scheme.
+    """
+    stem, ext = os.path.splitext(filename)
+    match = _DUP_SUFFIX_RE.match(stem)
+    if not match:
+        return None
+    base, n = match.groups()
+    return os.path.join(dir_path, f"{base}{ext}.supplemental-metadata({n}).json")
+
+
 def get_json_path_and_data(image_path: str) -> Tuple[dict, str]:
     """Find and load the JSON sidecar for image_path.
 
@@ -138,6 +156,11 @@ def get_json_path_and_data(image_path: str) -> Tuple[dict, str]:
     moved = os.path.basename(move_duplication_string(image_path))
     if moved != filename:
         candidate_paths.extend(_sidecar_candidates(moved, dir_path))
+
+    # New-format duplicate naming  e.g. "IMG(1).jpg" → "IMG.jpg.supplemental-metadata(1).json"
+    dedup_candidate = _dedup_supplemental_candidate(filename, dir_path)
+    if dedup_candidate:
+        candidate_paths.append(dedup_candidate)
 
     # Strip "-edited" suffix
     no_edited = filename.replace("-edited", "")
