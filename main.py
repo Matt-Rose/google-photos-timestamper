@@ -161,7 +161,57 @@ def get_json_path_and_data(image_path: str) -> Tuple[dict, str]:
         except (FileNotFoundError, OSError):
             continue
 
+    sibling = _find_live_photo_sibling_json(image_path)
+    if sibling is not None:
+        return sibling
+
     raise NoJsonFileFoundError(f"Could not find JSON sidecar for {image_path}")
+
+
+# Video half of a Live Photo (iPhone) / Motion Photo (Android) pair -- Google
+# Takeout gives the still-image half a sidecar but not the video half.
+_VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".mp", ".3gp", ".avi"}
+_LIVE_PHOTO_SIBLING_EXTENSIONS = {".jpg", ".jpeg", ".heic", ".heif", ".png"}
+
+
+def _find_live_photo_sibling_json(image_path: str) -> Optional[Tuple[dict, str]]:
+    """For a video with no sidecar of its own, borrow its paired still
+    image's sidecar -- they were captured at the same instant, so the same
+    timestamp/GPS applies to both.
+
+    Matches by filename prefix: iPhone Live Photo pairs share a stem
+    (`IMG_6375.HEIC` / `IMG_6375.MP4`); Android Motion Photo pairs have the
+    video's full filename as a prefix of the photo's filename
+    (`X.MP` / `X.MP.jpg`). Both are covered by "sibling starts with the
+    video's stem, followed immediately by a `.`" -- which also rules out
+    unrelated files that merely share a numeric prefix (e.g. `IMG_100.MP4`
+    must not match `IMG_1000.HEIC`).
+    """
+    dir_path = os.path.dirname(image_path)
+    filename = os.path.basename(image_path)
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in _VIDEO_EXTENSIONS:
+        return None
+
+    stem = os.path.splitext(filename)[0]
+    try:
+        siblings = os.listdir(dir_path)
+    except OSError:
+        return None
+
+    for sibling in siblings:
+        if sibling == filename:
+            continue
+        if not sibling.startswith(stem) or not sibling[len(stem):].startswith("."):
+            continue
+        if os.path.splitext(sibling)[1].lower() not in _LIVE_PHOTO_SIBLING_EXTENSIONS:
+            continue
+        try:
+            return get_json_path_and_data(os.path.join(dir_path, sibling))
+        except NoJsonFileFoundError:
+            continue
+
+    return None
 
 
 # ── EXIF helpers ───────────────────────────────────────────────────────────────
