@@ -75,6 +75,18 @@ gotchas" below before assuming similar-looking code elsewhere is still broken.
   it doubles as an audit trail of exactly what happened to each file.
 - `--sample PERCENT` requires `--dry-run` — sampling a real run would leave
   the untouched majority in a confusing half-migrated state.
+- **Year-folder cross-check**: Takeout's `Photos from YYYY` folders encode a
+  year Google itself assigned, independent of what this script parses out of
+  the JSON sidecar. `FileResult.assigned_timestamp` (the epoch mtime
+  `process_file()` decided on) is cross-checked against `_photos_from_year()`
+  for any file inside such a folder — a mismatch is a strong, free signal of
+  a sidecar-matching bug, not just unusual-but-correct data. Deliberately
+  *not* implemented: deduplication, or cross-checking timestamp consistency
+  between the same photo's copies across a year-folder and an album-folder
+  (Takeout genuinely duplicates files that belong to an album). Both are
+  bigger scope (need a real duplicate-identification pass over the tree) and
+  Apple Photos' own import-time duplicate detection already covers the
+  dedup half.
 
 ## Testing
 
