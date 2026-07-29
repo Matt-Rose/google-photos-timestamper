@@ -167,11 +167,6 @@ def get_json_path_and_data(image_path: str) -> Tuple[dict, str]:
     if no_edited != filename:
         candidate_paths.extend(_sidecar_candidates(no_edited, dir_path))
 
-    # Fuzzy fallback for macOS-timestamp variants (legacy format)
-    alike = get_alike_json(image_path)
-    if alike:
-        candidate_paths.append(alike)
-
     seen: set = set()
     for p in candidate_paths:
         if p in seen:
@@ -183,6 +178,21 @@ def get_json_path_and_data(image_path: str) -> Tuple[dict, str]:
             return data, p
         except (FileNotFoundError, OSError):
             continue
+
+    # Fuzzy fallback for macOS-timestamp variants (legacy format) -- computed
+    # lazily, only once every cheap candidate above has failed. It was always
+    # tried last anyway (appended after everything else, loop returns on
+    # first success), so computing it only when actually needed can't change
+    # which sidecar gets matched or whether one does; it just avoids paying
+    # for a full directory listing + regex scan on every file.
+    alike = get_alike_json(image_path)
+    if alike:
+        try:
+            with open(alike, "r") as f:
+                data = json.load(f)
+            return data, alike
+        except (FileNotFoundError, OSError):
+            pass
 
     sibling = _find_live_photo_sibling_json(image_path)
     if sibling is not None:
