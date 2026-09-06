@@ -88,6 +88,32 @@ gotchas" below before assuming similar-looking code elsewhere is still broken.
   Apple Photos' own import-time duplicate detection already covers the
   dedup half.
 
+## Scope: this repo now covers two phases
+
+`main.py` is phase one — restoring metadata to files from Takeout sidecars.
+Phase two is getting those files *into* Apple Photos, which turned out to have
+its own substantial failure modes. That knowledge lives in `docs/`, with
+supporting code in `tools/`:
+
+- **`docs/apple-photos-import.md`** — read this before running any import.
+  Photos hangs *inside* AppleScript event handling (stays running, 0% CPU, so
+  "relaunch if the process died" never fires); a polite quit cannot recover it;
+  photoscript's `killall Photos` hook must be suppressed and the patch only
+  loads via `PYTHONPATH`; `mediaanalysisd` pins the WAL open so it grows
+  without bound; read Photos.sqlite with `mode=ro`, never `immutable=1`.
+- **`docs/shared-album-reconciliation.md`** — rebuilding Google shared albums,
+  which Takeout cannot express. Includes the date-recovery ladder, why
+  filename matching is weaker than it looks, Live Photo re-pairing, and the
+  VP9/HDR transcode trap.
+- **`tools/photos_import.py`** — import harness implementing the safeguards.
+- **`tools/sitecustomize.py`** + **`tools/osxphotos-safe`** — the killall
+  suppression and a wrapper that loads it correctly.
+
+These tools shell out to `osxphotos`, `exiftool` and `ffmpeg` and drive
+Photos.app; they are deliberately not unit-tested end to end. `test/unit/
+test_photos_import.py` covers the pure logic — chunking (which must never
+split a Live Photo pair) and daemon CPU summing.
+
 ## Testing
 
 - `pixi run test` — fast unit tests (`test/unit/`)

@@ -1,0 +1,13 @@
+#!/bin/bash
+# osxphotos with photoscript's `killall Photos` hook suppressed.
+#
+# The patch MUST arrive via PYTHONPATH: a copy in the venv's site-packages
+# never loads, because Homebrew's own sitecustomize.py sits in the stdlib
+# directory, which precedes site-packages on sys.path.
+#
+# Set OSXPHOTOS_BIN to point at your osxphotos if it is not on PATH.
+# See docs/apple-photos-import.md.
+set -euo pipefail
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+export PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}"
+exec "${OSXPHOTOS_BIN:-osxphotos}" "$@"

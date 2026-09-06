@@ -84,3 +84,20 @@ Google Takeout doesn't always name a sidecar exactly `Image.ext.json`. The scrip
 pixi run test       # fast unit tests
 pixi run test-all   # everything, including integration tests that exercise real exiftool
 ```
+
+## Importing into Apple Photos
+
+Restoring metadata is only half the job; getting the files into Apple Photos
+has its own failure modes, several of which fail *silently*. Before running an
+import, read:
+
+- [docs/apple-photos-import.md](docs/apple-photos-import.md) — why Photos
+  hangs, how to detect and recover it, WAL bloat, TCC/Automation permissions,
+  and the osxphotos flags that matter.
+- [docs/shared-album-reconciliation.md](docs/shared-album-reconciliation.md) —
+  rebuilding Google Photos shared albums, which Takeout cannot export.
+
+`tools/photos_import.py` implements the import harness those documents
+describe; run it via `tools/osxphotos-safe` so photoscript's `killall Photos`
+hook is suppressed.
+
