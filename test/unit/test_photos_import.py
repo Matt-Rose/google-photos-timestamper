@@ -69,3 +69,30 @@ def test_analysis_cpu_ignores_unparseable_lines(monkeypatch):
 
     monkeypatch.setattr(photos_import.subprocess, "run", fake_run)
     assert photos_import.analysis_cpu() == pytest.approx(5.0)
+
+
+def test_photos_pid_filters_by_current_user(monkeypatch):
+    """Another account's Photos must never be returned.
+
+    With fast user switching, a second account's Photos.app matches the same
+    process pattern. Without a -u filter, restart_photos() would force-quit
+    someone else's session.
+    """
+    seen: dict[str, list[str]] = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="4242\n", stderr="")
+
+    monkeypatch.setattr(photos_import.subprocess, "run", fake_run)
+    assert photos_import.photos_pid() == "4242"
+    assert "-u" in seen["cmd"], "pgrep must filter by user"
+    assert str(os.getuid()) in seen["cmd"]
+
+
+def test_photos_pid_none_when_not_running(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(photos_import.subprocess, "run", fake_run)
+    assert photos_import.photos_pid() is None

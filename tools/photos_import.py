@@ -74,8 +74,17 @@ def wait_for_quiet(threshold: float = QUIET_THRESHOLD, maxwait: int = QUIET_MAXW
 
 
 def photos_pid() -> str | None:
+    """PID of *this user's* Photos.app, or None.
+
+    The -u filter is essential, not tidiness. On a machine with fast user
+    switching, another account's Photos is also running and matches the same
+    pattern -- without the filter this returns their PID and restart_photos()
+    force-quits an innocent app in someone else's session, mid-import.
+    """
     out = subprocess.run(
-        ["pgrep", "-f", PHOTOS_PATTERN], capture_output=True, text=True
+        ["pgrep", "-u", str(os.getuid()), "-f", PHOTOS_PATTERN],
+        capture_output=True,
+        text=True,
     ).stdout.split()
     return out[0] if out else None
 
@@ -136,7 +145,10 @@ def restart_photos() -> bool:
             if not photos_pid():
                 break
             say(f"    escalating: pkill {sig}")
-            subprocess.run(["pkill", sig, "-f", PHOTOS_PATTERN], capture_output=True)
+            subprocess.run(
+                ["pkill", sig, "-u", str(os.getuid()), "-f", PHOTOS_PATTERN],
+                capture_output=True,
+            )
             for _ in range(grace):
                 if not photos_pid():
                     break
