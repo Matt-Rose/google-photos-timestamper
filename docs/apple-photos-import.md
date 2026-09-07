@@ -200,6 +200,31 @@ dominated by kind-1510 import sessions. Compare `ZKIND=2`.
 database for 30 days and can still match `--skip-dups`, in which case
 `--dup-albums` adds a *deleted* asset to the album.
 
+## Verifying an import: filenames lie
+
+Do not verify coverage by comparing filenames. A library accumulates the same
+photo under several naming conventions, and a naive comparison reports files
+as missing that are present. Checking one album four times with successively
+better rules gave "missing" counts of 37, then 2, then 1, then 0 — none were
+ever actually absent:
+
+    1,043  exact filename match
+       21  stem truncated to 47 chars (Takeout's truncation)
+       14  "(N)" duplicate suffix — on disk OR in the library, both directions
+        1  "_Original.JPG" suffix
+
+`--skip-dups` matches on **fingerprint**, so it finds all of these correctly;
+it is the filename check that is wrong. When verifying, either apply every
+rule above or compare counts rather than names:
+
+    distinct filenames in album  ==  filename-group count on disk
+
+That equality held exactly for every album once the import was complete, and
+is a far more reliable check than set differences on names.
+
+Note also that `ZCACHEDCOUNT` on `ZGENERICALBUM` lags. Count the join table
+(`Z_<n>ASSETS`) for a true membership figure.
+
 ## Things that are not the problem
 
 Recorded because each cost real time:

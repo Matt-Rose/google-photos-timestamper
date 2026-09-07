@@ -144,6 +144,25 @@ Library, Shared Albums on top as the browsing surface. Note that every item
 will show the person who added it as the contributor — original per-contributor
 attribution from Google is not recoverable.
 
+## Live Photos only pair on first import
+
+A still that is **already in the library** cannot be retrofitted into a Live
+Photo. osxphotos imports photo *groups*; if the group's still is a duplicate,
+`--skip-dups` skips the whole group, `--dup-albums` adds the existing still to
+the album, and the video is never imported at all.
+
+Measured on one album: 45 still+video pairs, but only ~7 stills were new, and
+exactly 8 became Live Photos. Every pair that *could* pair, did.
+
+This matters most when the target library was seeded by **dragging Takeout
+folders into the Photos GUI**, which imports stills and videos as separate
+assets with no pairing. Such a library will contain thousands of unpaired
+Live Photo halves, and importing the same photos again will not fix them.
+
+Fixing it would mean deleting assets that may have years of history — edits,
+album memberships, iCloud identity — to regain a second of motion. Usually
+the wrong trade. Decide deliberately rather than by default.
+
 ## Files that will not resolve
 
 Expect a small tail that no method reaches: crops (the download is a cropped
