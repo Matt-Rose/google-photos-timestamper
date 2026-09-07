@@ -1,5 +1,31 @@
 # Rebuilding Google Photos shared albums in Apple Photos
 
+## The workflow, end to end
+
+    # 1. what does this album need?
+    python3 tools/album_survey.py "~/Downloads/Album Name"
+
+    # 2. recover dates for anything undated, from an existing Takeout tree
+    python3 tools/recover_dates.py survey "~/Downloads/Album Name" \
+        /path/to/Takeout/ready -o proposals.csv
+    #    review proposals.csv, then:
+    python3 tools/recover_dates.py apply proposals.csv
+
+    # 3. VP9 videos import as NOTHING; transcode them (HDR-aware)
+    python3 tools/transcode_vp9.py "~/Downloads/Album Name" \
+        --backup-dir /somewhere/vp9-originals
+
+    # 4. import (see docs/apple-photos-import.md -- Photos hangs, this recovers)
+    OSXPHOTOS_BIN=/path/to/osxphotos python3 tools/photos_import.py \
+        "~/Downloads/Album Name" "Album Name" --osxphotos tools/osxphotos-safe
+
+    # 5. verify: album asset count == the "EXPECTED ALBUM ASSETS" from step 1
+
+Steps 4 and 5 are the ones with teeth. Then, in the Photos UI only: move the
+album's assets into the Shared Library, and create an iCloud Shared Album --
+neither is scriptable.
+
+
 Google Takeout exports only albums *you* created, and within those only the
 photos *you personally* added. A shared album's contributions from other
 people are missing from everybody's Takeout. This document records the method

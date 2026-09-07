@@ -105,6 +105,15 @@ supporting code in `tools/`:
   which Takeout cannot express. Includes the date-recovery ladder, why
   filename matching is weaker than it looks, Live Photo re-pairing, and the
   VP9/HDR transcode trap.
+- **`tools/album_survey.py`** — what an album folder needs before import:
+  undated files, VP9/HDR videos, still+video pairs, and the expected asset
+  count used to verify the import afterwards.
+- **`tools/recover_dates.py`** — recovers capture dates for the ~5% of files
+  that have none, via filename, then filename+aspect-ratio, then pixel
+  comparison against an existing Takeout tree.
+- **`tools/transcode_vp9.py`** — HDR-aware VP9 transcode. Photos refuses VP9
+  silently, and a naive H.264 encode of an HLG source produces 8-bit data
+  still tagged as HDR.
 - **`tools/photos_import.py`** — import harness implementing the safeguards.
 - **`tools/sitecustomize.py`** + **`tools/osxphotos-safe`** — the killall
   suppression and a wrapper that loads it correctly.
