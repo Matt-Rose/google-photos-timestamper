@@ -189,6 +189,40 @@ Fixing it would mean deleting assets that may have years of history — edits,
 album memberships, iCloud identity — to regain a second of motion. Usually
 the wrong trade. Decide deliberately rather than by default.
 
+## Adding to an EXISTING shared album will duplicate
+
+An iCloud Shared Album holds its own downscaled copies, not references to
+library assets. Measured on a real pair — a shared album populated from one
+partner's Takeout, and a private album built from the web download of the
+same Google album:
+
+    private album assets   1,153
+    shared album assets    1,097
+    SAME asset in both:        0     <- nothing for Photos to deduplicate
+    same FILENAME in both:   989     <- the same photographs, twice over
+
+So adding the private album wholesale would have produced ~2,250 items with
+989 visible duplicate pairs. Photos cannot prevent it: dedup works on asset
+identity, and a shared album's items are separate assets by construction.
+
+**Compute the real gap first**, using `ZCOLLECTIONSHARE` to enumerate the
+shared album (see `docs/apple-photos-import.md`). Apply the naming-variant
+rules — raw filename comparison said 150 missing; after accounting for
+47-char truncation, `(N)` suffixes in either direction and `_Original`, the
+true gap was **74**.
+
+**Then add only the gap.** Stage just those files and import them with
+`--skip-dups --dup-albums` into a scratch album: every file matches an asset
+already in the library, so the existing assets are linked and nothing is
+uploaded. The proof it worked is the library asset count **not changing** —
+74 files in, album has 74 members, library stayed at 61,669. Share that
+scratch album into the shared album and delete it.
+
+The alternative is deleting and recreating the shared album, which is
+guaranteed clean but loses its comment history and re-uploads everything.
+Recreating is right when the overlap is near-total; the gap approach is
+right when it is not.
+
 ## Files that will not resolve
 
 Expect a small tail that no method reaches: crops (the download is a cropped

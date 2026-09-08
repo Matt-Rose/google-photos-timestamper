@@ -144,6 +144,16 @@ Useful queries:
 **Never compare raw `ZGENERICALBUM` counts between libraries.** They are
 dominated by kind-1510 import sessions. Compare `ZKIND=2`.
 
+### iCloud Shared Albums live in `ZSHARE`, not `ZGENERICALBUM`
+
+    -- the shared albums themselves (ZSCOPETYPE 0 = shared album, 4 = Shared Library)
+    select Z_PK, ZSCOPETYPE, ZTITLE, ZASSETCOUNT from ZSHARE;
+    -- their members: ZASSET.ZCOLLECTIONSHARE joins to ZSHARE.Z_PK
+    select ZCOLLECTIONSHARE, count(*) from ZASSET where ZCOLLECTIONSHARE is not null group by 1;
+
+This makes shared-album membership fully readable, which is the only way to
+compute what a shared album is actually missing before adding to it.
+
 ## Permissions
 
 - **Automation**: `osxphotos import` drives Photos over AppleScript and fails
@@ -153,6 +163,34 @@ dominated by kind-1510 import sessions. Compare `ZKIND=2`.
   Privacy & Security > Automation, or `tccutil reset AppleEvents <bundle-id>`
   to make it re-prompt. **Grants are per-user**: granting it in one account
   does nothing for another.
+
+- **Grant Full Disk Access to the terminal app, and be done with it.** The
+  narrower "removable volumes" consent *lapsed three times in two days* on a
+  live machine, each time silently, mid-task. Full Disk Access on the hosting
+  terminal (a signed Apple app that already needs Automation for Photos) is
+  stable and covers the library volume. Chasing the narrow grant cost hours.
+
+- **A TCC denial on the library volume looks exactly like a hung Photos.**
+  `osxphotos` copies `Photos.sqlite` to a temp directory for duplicate
+  detection, so when the volume is blocked *every* chunk fails instantly and
+  identically:
+
+      OSError: Error Domain=NSCocoaErrorDomain Code=513 "Photos.sqlite"
+      couldn't be copied because you don't have permission to access ...
+      NSUnderlyingError=... "Operation not permitted"
+
+  Without that message the symptom is just "every chunk failed", which reads
+  as a hang. It is not: Photos answers probes normally throughout. **Check
+  whether Photos answers before concluding it is hung**, and never discard
+  the subprocess output — the same command went 0/4 blocked and 4/4 once
+  Full Disk Access was granted.
+
+- **SSH is a file-access workaround only, not a Photos one.** With Full Disk
+  Access on `/usr/libexec/sshd-keygen-wrapper`, `ssh localhost` reads the
+  library volume even when the interactive session cannot. But an SSH session
+  lands in launchd's `Background` namespace with no WindowServer, so it
+  cannot drive Photos over AppleScript. An import needs file access *and*
+  Apple Events at once, so SSH alone can never run one.
 
 - **Full Disk Access / removable volumes**: file access failures on an
   external volume are TCC, not Unix permissions. TCC attributes the access to
