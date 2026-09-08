@@ -220,7 +220,7 @@ def test_dedup_supplemental_candidate_none_without_duplicate_suffix():
 
 
 def test_get_json_path_and_data_matches_new_format_duplicate_naming(tmp_path):
-    # Real-world shape found in Sophia's export: the original and its
+    # Real-world shape found in a Takeout export: the original and its
     # duplicate both have "supplemental-metadata" sidecars, but the
     # duplicate's "(1)" lands after "supplemental-metadata", not in the
     # same position as on the media filename.

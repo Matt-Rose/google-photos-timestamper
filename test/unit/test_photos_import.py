@@ -96,3 +96,41 @@ def test_photos_pid_none_when_not_running(monkeypatch):
 
     monkeypatch.setattr(photos_import.subprocess, "run", fake_run)
     assert photos_import.photos_pid() is None
+
+
+class TestFirstError:
+    """A failure must be identifiable from the console line alone.
+
+    A TCC denial on the library volume fails every chunk identically and was
+    misread as a hung Photos, costing eight needless restarts.
+    """
+
+    def test_extracts_permission_error(self):
+        output = (
+            "Importing file 1/20\n"
+            'OSError: Error Domain=NSCocoaErrorDomain Code=513 "Photos.sqlite" '
+            "couldn't be copied because you don't have permission\n"
+        )
+        assert "OSError" in photos_import.first_error(output)
+
+    def test_extracts_applescript_error(self):
+        output = "blah\nAppleScriptError: run_script 'albumAdd' failed: User cancelled. (-128)\n"
+        assert "albumAdd" in photos_import.first_error(output)
+
+    def test_returns_none_when_nothing_recognisable(self):
+        assert photos_import.first_error("just some chatter\nmore chatter\n") is None
+
+    def test_truncates_very_long_lines(self):
+        assert len(photos_import.first_error("OSError: " + "x" * 500)) <= 160
+
+
+def test_import_chunk_returns_output_not_just_a_bool(monkeypatch):
+    """Discarding osxphotos' output is what made the TCC failure undiagnosable."""
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1, stdout="out", stderr="OSError: nope")
+
+    monkeypatch.setattr(photos_import.subprocess, "run", fake_run)
+    ok, output = photos_import.import_chunk(["/a.jpg"], "Album", "osxphotos")
+    assert ok is False
+    assert "OSError: nope" in output

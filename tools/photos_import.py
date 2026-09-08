@@ -214,14 +214,30 @@ def chunk_files(paths: list[str], chunk_size: int) -> list[list[str]]:
     return chunks
 
 
-def import_chunk(files: list[str], album: str, osxphotos: str) -> bool:
+def import_chunk(files: list[str], album: str, osxphotos: str) -> tuple[bool, str]:
+    """Run one chunk. Returns (ok, combined output).
+
+    The output is returned rather than discarded because not every failure is
+    a hung Photos: a TCC denial on the library volume fails every chunk
+    identically, and without the message that is indistinguishable from a
+    hang. Diagnosing one cost eight needless Photos restarts.
+    """
     cmd = [
         osxphotos, "import", *files,
         "--album", album,
         "--skip-dups", "--dup-albums", "--auto-live", "--resume", "--verbose",
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
-    return proc.returncode == 0
+    return proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+
+
+def first_error(output: str) -> str | None:
+    """The most informative line of an osxphotos failure, for the console."""
+    for line in reversed(output.splitlines()):
+        line = line.strip()
+        if line.startswith(("OSError", "AppleScriptError", "Error:", "ValueError")):
+            return line[:160]
+    return None
 
 
 def run(album_dir: str, album: str, chunk_size: int, osxphotos: str, attempts: int) -> int:
@@ -231,7 +247,10 @@ def run(album_dir: str, album: str, chunk_size: int, osxphotos: str, attempts: i
         if not f.startswith(".")
     ]
     chunks = chunk_files(files, chunk_size)
+    log_path = os.path.expanduser(f"~/photos-import-{album.strip().replace(' ', '_')}.log")
+    log = open(log_path, "w")
     say(f"{len(files)} files -> {len(chunks)} chunks of <= {chunk_size}")
+    say(f"failures logged to {log_path}")
 
     failed = 0
     for index, chunk in enumerate(chunks, 1):
@@ -240,19 +259,26 @@ def run(album_dir: str, album: str, chunk_size: int, osxphotos: str, attempts: i
             if photos_is_hung() and not restart_photos():
                 say(f"[{index}/{len(chunks)}] ABORT: Photos unrecoverable")
                 return 1
-            if import_chunk(chunk, album, osxphotos):
+            ok, output = import_chunk(chunk, album, osxphotos)
+            if ok:
                 say(f"[{index}/{len(chunks)}] ok ({len(chunk)} files)")
                 break
-            say(f"[{index}/{len(chunks)}] attempt {attempt}/{attempts} failed")
+            log.write(f"\n===== chunk {index} attempt {attempt} =====\n{output}\n")
+            log.flush()
+            say(f"[{index}/{len(chunks)}] attempt {attempt}/{attempts} failed"
+                f" -- {first_error(output) or 'see ' + log.name}")
             if attempt < attempts:
-                # Photos is very likely wedged: restart before retrying rather
-                # than firing the same batch at a blocked event loop.
-                restart_photos()
+                # Only restart if Photos is genuinely unresponsive. Restarting
+                # after every failure churns the app for errors it did not
+                # cause -- a permission denial, a corrupt file, a bad flag.
+                if photos_is_hung():
+                    restart_photos()
                 time.sleep(60 * attempt)
         else:
             failed += 1
             say(f"[{index}/{len(chunks)}] GIVING UP after {attempts} attempts")
 
+    log.close()
     say(f"done: {len(chunks) - failed}/{len(chunks)} chunks ok")
     return 0 if failed == 0 else 2
 
