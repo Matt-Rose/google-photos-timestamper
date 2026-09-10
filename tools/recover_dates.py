@@ -50,14 +50,26 @@ FILENAME_PATTERNS = [
 
 
 def date_from_filename(name: str) -> str | None:
+    """First *valid* date encoded in a filename, or None.
+
+    Every match is validated before being returned, and a rejected match does
+    not stop the search. Scanned-archive filenames often carry a subject year
+    in front of the real date -- "<description> 201321072014.jpg" -- where the
+    leftmost 8-digit window is "20132107", i.e. month 21. Returning that
+    unchecked produced dates like 2090-72-01, which then crashed apply().
+    """
     for pattern, _kind in FILENAME_PATTERNS:
-        match = pattern.search(name)
-        if not match:
-            continue
-        g = match.groups()
-        if len(g) == 6:
-            return f"{g[0]}-{g[1]}-{g[2]} {g[3]}:{g[4]}:{g[5]}"
-        return f"{g[0]}-{g[1]}-{g[2]} 12:00:00"
+        for match in pattern.finditer(name):
+            g = match.groups()
+            if len(g) == 6:
+                stamp = f"{g[0]}-{g[1]}-{g[2]} {g[3]}:{g[4]}:{g[5]}"
+            else:
+                stamp = f"{g[0]}-{g[1]}-{g[2]} 12:00:00"
+            try:
+                datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                continue                                # impossible: keep looking
+            return stamp
     return None
 
 
@@ -195,16 +207,29 @@ def apply(csv_path: str) -> None:
             failed += 1
             continue
         text = stamp.replace(":", "-", 2) if stamp[4] == ":" else stamp
-        when = datetime.strptime(text[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        ts = when.timestamp()
+        try:
+            when = datetime.strptime(text[:19], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            # Skip the row rather than abort: a single bad date used to raise
+            # here and silently drop every valid row behind it in the file.
+            print(f"BADDATE {row['filename']}: {stamp!r}")
+            failed += 1
+            continue
+        ts = when.replace(tzinfo=timezone.utc).timestamp()
         try:
             write_exif_tags(path, ts, None, None, None)
         except subprocess.CalledProcessError as exc:
             # exiftool refuses to write when the extension contradicts the
             # content (e.g. a JPEG named .png); -m does NOT rescue it. Rename.
             kind = subprocess.run(["file", "-b", path], capture_output=True, text=True).stdout
-            if kind.startswith("JPEG") and path.lower().endswith(".png"):
-                renamed = os.path.splitext(path)[0] + ".jpg"
+            renamed = os.path.splitext(path)[0] + ".jpg"
+            # Any wrong extension blocks the write, not just .png: Google has
+            # also returned JPEGs named .HEIC. Never clobber an existing file.
+            if (
+                kind.startswith("JPEG")
+                and not path.lower().endswith((".jpg", ".jpeg"))
+                and not os.path.exists(renamed)
+            ):
                 os.rename(path, renamed)
                 write_exif_tags(renamed, ts, None, None, None)
                 os.utime(renamed, (ts, ts))

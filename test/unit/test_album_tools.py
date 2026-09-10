@@ -7,6 +7,7 @@ where the bugs actually were.
 
 import os
 import sys
+from datetime import datetime
 
 import pytest
 
@@ -28,6 +29,30 @@ class TestDateFromFilename:
     )
     def test_extracts(self, name, expected):
         assert recover_dates.date_from_filename(name) == expected
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            # A subject year in front of the scan date: the leftmost 8-digit
+            # window is 2013-21-07, which is not a date. Shapes taken from real
+            # scanned-archive filenames, with the descriptions genericised.
+            "Msubject description 201321072014.jpg",
+            "J subject description 2 july 200021072014.jpg",
+            "Ithree subject names 209072014.jpg",
+        ],
+    )
+    def test_rejects_impossible_dates(self, name):
+        """Must never return e.g. 2090-72-01; apply() used to crash on it."""
+        stamp = recover_dates.date_from_filename(name)
+        if stamp is not None:
+            datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S")   # parses or fails
+
+    def test_keeps_looking_past_an_invalid_match(self):
+        """An impossible leftmost match must not mask a valid one after it."""
+        assert (
+            recover_dates.date_from_filename("scan20139901_PXL_20230531_145342087.jpg")
+            == "2023-05-31 14:53:42"
+        )
 
     @pytest.mark.parametrize("name", ["IMG_1915.JPG", "koala_13.png", "Kitchen plan.png"])
     def test_no_false_positives(self, name):
