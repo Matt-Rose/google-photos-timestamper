@@ -37,6 +37,35 @@ must probe whether it *answers*, and force-restart it when it does not. An
 import run that skips this will fire batch after batch at a dead app,
 accomplishing nothing while still creating import-session records.
 
+## `-1712` is three different problems wearing one error
+
+`AppleEvent timed out (-1712)` from Photos means only "no answer within the
+timeout". It does **not** mean Photos is hung, and the three causes need
+telling apart before anyone restarts or kills anything:
+
+| Cause | How to tell |
+| --- | --- |
+| No Apple Events at all (wrong bootstrap namespace) | a *System Events* probe fails too |
+| Photos genuinely hung | a **cheap** Photos call (`version`) also times out |
+| The query was simply too expensive | the cheap call returns instantly |
+
+Order the probes cheapest-first: `tell application "System Events" to return
+name of first process`, then `tell application "Photos" to return version`,
+and only then anything that walks the library.
+
+**`count of media items` is not a health check.** On a 63k-asset library it
+does not return inside the 120 s default timeout, so it reports `-1712` on a
+perfectly healthy Photos answering the GUI normally. `photos_answers()`
+already counts *albums* instead, and `photos_is_hung()` probes twice 20 s
+apart, precisely so one slow answer cannot condemn a working app -- see the
+docstrings in `tools/photos_import.py`. That reasoning lived only in those
+docstrings, and was rediscovered the hard way on 2026-09-09; it is written
+down here so the next reader meets it before reaching for `kill -9`.
+
+Distinguish `-1712` from **`-1743`** (not authorised), which is the
+Automation-permission failure described under "Permissions" -- a different
+problem with a different fix.
+
 ## Rules for a working import harness
 
 Each rule below was learned by getting it wrong first.

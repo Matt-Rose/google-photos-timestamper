@@ -110,7 +110,9 @@ supporting code in `tools/`:
   count used to verify the import afterwards.
 - **`tools/recover_dates.py`** — recovers capture dates for the ~5% of files
   that have none, via filename, then filename+aspect-ratio, then pixel
-  comparison against an existing Takeout tree.
+  comparison against an existing Takeout tree. Scanned family-history albums
+  are the exception: they have no capture date to recover and need the scan
+  date instead — see `docs/shared-album-reconciliation.md`.
 - **`tools/transcode_vp9.py`** — HDR-aware VP9 transcode. Photos refuses VP9
   silently, and a naive H.264 encode of an HLG source produces 8-bit data
   still tagged as HDR.

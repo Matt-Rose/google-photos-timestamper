@@ -84,6 +84,47 @@ Three passes, cheapest first. Over 303 files this reached 293 (96.7%).
    uniqueness test wrongly discarded a 0.000 match because a 0.007 duplicate
    existed.
 
+## Scanned family archives are a different problem entirely
+
+Some albums are not photographs with capture dates at all. Two albums in the
+2026-09 batch turned out to be digitised family-history archives: no camera
+`Make`/`Model` on any file, `Software: Picasa`, flatbed dimensions, and
+catalogue-style filenames of the form `<index> <description> <year>.jpg` --
+names that describe the *subject*, often a 19th-century one. 331 of 425
+undated files in that batch came from these two albums alone.
+
+No reference tree can date them, so do not go looking for a better one. The
+only meaningful date is **when the scan was made**:
+
+* One album encoded it in the filename as a trailing `DDMMYYYY` -- a single
+  scanning session spanning about three weeks.
+* The other had nothing; everything was set to the midpoint of that range.
+
+This matters because undated is not neutral: Photos falls back to file mtime,
+which is the download date, so leaving them alone scatters century-old family
+photographs through the current month.
+
+Watch for a **subject year in front of the scan date**:
+`<description> 201321072014.jpg` is 2013 (subject) followed by 21/07/2014 (scan).
+The trailing 8 digits are the date; the leftmost 8-digit window is `20132107`,
+i.e. month 21. `date_from_filename()` now validates every candidate and keeps
+looking past an impossible one, but it does **not** parse `DDMMYYYY` -- adding
+that format would misread ordinary `YYYYMMDD` names. Those files fall through
+to the reference tree and, failing that, need dating by hand.
+
+## Two apply() failure modes, both fixed 2026-09-09
+
+1. **An impossible date aborted the whole file.** `apply()` called `strptime`
+   unguarded, so one bad row raised `ValueError` and every valid row behind it
+   in that CSV was silently skipped -- 4 lost rows looked like a clean run
+   apart from a traceback. It now prints `BADDATE`, counts a failure, and
+   continues.
+2. **The rename-retry only covered `.png`.** exiftool refuses to write when the
+   extension contradicts the content, and `-m` does not rescue it. The retry
+   was hardcoded to JPEGs named `.png`; Google also returns JPEGs named
+   `.HEIC`. It now retries any non-JPEG extension whose content is JPEG, and
+   refuses to clobber an existing file of the target name.
+
 ## Filename matching is far weaker than it looks
 
 Joining 5,842 filenames against a 284k-file Takeout tree appeared to give
