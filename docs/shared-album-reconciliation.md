@@ -54,6 +54,50 @@ The dateless files are genuinely dateless at source, not download damage:
 Picasa-era UUID-named uploads, WhatsApp forwards (`IMG-20180225-WA0014.jpg`),
 screenshots and collages.
 
+## Driving "Download all" from the browser
+
+The album list and the download trigger are both reachable by automation, but
+three things are not obvious:
+
+* **Google prepares zips serially, one per account.** Firing ~20 "Download
+  all" requests in quick succession delivered seven, spaced 2-3 minutes apart,
+  and then silently dropped the rest. Every one had reported success in the
+  page. Trigger one, wait for the zip, trigger the next -- and always
+  reconcile what arrived against the list you asked for, because a dropped
+  request is indistinguishable from a slow one.
+* **Album-title search is a separate control from the main search bar.** The
+  big search box at the top searches *photos* and does not find albums shared
+  with you; a small magnifier beside the All / My albums / Shared with me
+  chips searches album titles and does. The box must be opened by clicking
+  the magnifier before typing -- typing at it while closed goes nowhere.
+* **Zips are named after the album**, as `<Album Name>-1-001.zip`, including
+  for albums shared *with* you. The `-001` is a part number; large albums can
+  split, so check for `-002` before unpacking. The folder inside often carries
+  a **trailing space** (`Album Name /`), which is worth normalising away on
+  extraction rather than quoting forever afterwards.
+
+Match albums by exact name, not a substring. Album titles repeat: a library
+here held two albums whose names differed only by their date prefix, and a
+substring match on the shared part opened the wrong one and downloaded it.
+Match on the full name, and confirm the page title before triggering the
+download.
+
+## Extensions lie, at scale
+
+Google serves **JPEG bytes under a `.HEIC` name** routinely -- 436 files
+across one 37-album batch, up to 96 in a single album. JPEGs named `.png`
+also occur, mixed in with real PNGs in the same folder.
+
+Photos sniffs content and imports them correctly regardless, so this is not an
+import problem. It is a *preparation* problem: **exiftool refuses to write when
+the extension contradicts the content**, and `-m` does not rescue it, so any
+date recovery on those files fails until they are renamed. Sweep and rename
+before dating, not after -- `album_survey.py` reports the mismatches.
+
+Check the whole set, not just the newly arrived part of it: one album that had
+been downloaded in an earlier pass still had 7 mislabelled files because the
+sweep at the time only covered that day's arrivals.
+
 ## Recovering the missing dates
 
 Three passes, cheapest first. Over 303 files this reached 293 (96.7%).

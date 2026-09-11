@@ -149,6 +149,67 @@ A library with a 49 GB WAL imported ~3.4k items successfully while one with a
 26.5 GB WAL failed. The WAL is a real problem for disk space and startup time;
 it was not the discriminator for import success.
 
+## osxphotos creates a NEW album, it does not add to an existing one
+
+`--album "Name"` creates a fresh album row every run, even when an album of
+that name already exists. After importing 21 albums whose names matched
+albums already in the library, every one of those names appeared **twice**:
+the old partial album and a new complete one.
+
+Two consequences:
+
+1. **Verify against the newest album row**, not the first. A query that takes
+   the lowest `Z_PK` reads the *old* album and reports that the import added
+   nothing -- which is exactly what it looked like until the library asset
+   count showed 404 new assets.
+2. **Duplicate album names accumulate** and have to be cleaned up by hand in
+   the UI. Tell them apart by item count: the new one is a superset.
+
+## Counting albums: three columns that will mislead you
+
+* **`ZTRASHEDSTATE`** -- a deleted album stays in `ZGENERICALBUM` with
+  `ZTRASHEDSTATE=1`. Any query counting albums must exclude it, or it reports
+  albums the user deleted days ago. Filter
+  `(ZTRASHEDSTATE is null or ZTRASHEDSTATE=0)`.
+* **`ZASSET.ZFILENAME` is Photos' internal name**, not the original. A file
+  imported as `IMG_4156.HEIC` shows an unrelated UUID here. The original is
+  `ZADDITIONALASSETATTRIBUTES.ZORIGINALFILENAME`; comparing `ZFILENAME`
+  against filenames on disk gives 0% overlap and looks like a failed import.
+* **Live Photos are identified by `ZVIDEOCPDURATIONVALUE`**, not
+  `ZAVALANCHEUUID`, which reads 0 even on albums that demonstrably contain
+  Live Photos.
+
+## Chunk size trades blast radius against a per-chunk database copy
+
+`--skip-dups` copies `Photos.sqlite` to a temp directory on **every osxphotos
+invocation**, and the harness invokes it once per chunk. On a 1.8 GB library
+on an external USB disk that copy alone was measured at tens of seconds, so a
+1,642-file import at `--chunk-size 20` pays it 85 times.
+
+Raising the chunk size amortises it -- at 100 files you pay it 17 times
+instead of 85. The trade-off is real though: a chunk is the unit of failure,
+so a larger chunk means more files lost when one is unimportable. In one run,
+two files with corrupt dates took down the 20 files sharing their chunk; at
+100 they would have taken down 100.
+
+## A file Photos cannot date fails its whole chunk
+
+    AppleScriptError: run_script 'photoDate' failed: date value out of range
+
+This is **not** transient and retrying cannot fix it -- the harness burned all
+three attempts and gave up, losing the whole chunk. The cause was two videos
+whose QuickTime `CreateDate` read years 29946 and 108866, while
+`MediaCreateDate` and `ModifyDate` held the true date to within seconds.
+
+Repair rather than discard: rewrite `CreateDate` from `MediaCreateDate`.
+`album_survey.py` now reports out-of-range dates before an import starts,
+which is far cheaper than diagnosing a dead chunk afterwards.
+
+**Distinguish it from the transient case.** An `albumAdd` timeout is a hang
+and retrying works; a `photoDate` range error is data and retrying never
+works. In one 21-album run there were 18 retries and 16 Photos restarts, all
+of which recovered -- and exactly one failure that did not, which was this.
+
 ## Reading a Photos library safely
 
     sqlite3 "file://<lib>/database/Photos.sqlite?mode=ro" "select count(*) from ZASSET;"

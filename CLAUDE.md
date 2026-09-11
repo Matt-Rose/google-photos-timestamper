@@ -106,8 +106,11 @@ supporting code in `tools/`:
   filename matching is weaker than it looks, Live Photo re-pairing, and the
   VP9/HDR transcode trap.
 - **`tools/album_survey.py`** — what an album folder needs before import:
-  undated files, VP9/HDR videos, still+video pairs, and the expected asset
-  count used to verify the import afterwards.
+  undated files, VP9/HDR videos, still+video pairs, the expected asset count
+  used to verify the import afterwards, plus two checks that each cost a real
+  failure before being added — files whose extension contradicts their content
+  (exiftool refuses to write to them) and capture dates Photos will reject
+  outright (which fail an entire import chunk, not just the file).
 - **`tools/recover_dates.py`** — recovers capture dates for the ~5% of files
   that have none, via filename, then filename+aspect-ratio, then pixel
   comparison against an existing Takeout tree. Scanned family-history albums
