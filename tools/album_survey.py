@@ -6,6 +6,8 @@ Answers, for a folder of files pulled from Google Photos' web "Download all":
 * which videos are VP9, and whether they are HDR (Photos silently refuses VP9)
 * how many still+video pairs there are, which sets the expected album size
 * the expected asset count, so an import can be verified by counting
+* files whose extension contradicts their content (exiftool refuses to write)
+* dates Photos will reject outright, which fail a whole import chunk
 
 Usage::
 
@@ -24,6 +26,27 @@ VIDEO_EXT = {".mp4", ".mov", ".m4v"}
 # Google's HLG HDR transfer function. Transcoding these to 8-bit while leaving
 # the colour tags in place produces banding and wrong tone-mapping.
 HLG_TRANSFER = "arib-std-b67"
+
+# Magic bytes by extension. Google routinely serves JPEG bytes under a .HEIC
+# name (436 files in one 37-album batch), and JPEGs named .png also occur.
+# exiftool REFUSES to write when the extension contradicts the content, and
+# -m does not rescue it, so this blocks date recovery until the file is
+# renamed. Photos itself sniffs content and imports them regardless.
+MAGIC = {
+    ".jpg": (b"\xff\xd8\xff",),
+    ".jpeg": (b"\xff\xd8\xff",),
+    ".png": (b"\x89PNG",),
+    ".gif": (b"GIF8",),
+}
+# HEIC/HEIF are ISO-BMFF: the 'ftyp' box sits at offset 4, not offset 0.
+BMFF_EXT = {".heic", ".heif"}
+
+# Photos rejects a capture date outside this range with
+# "AppleScriptError: run_script 'photoDate' failed: date value out of range",
+# which fails the ENTIRE import chunk, not just the offending file. Seen from
+# corrupt QuickTime CreateDate values (years 29946 and 108866) where
+# MediaCreateDate and ModifyDate still held the true date.
+MIN_YEAR, MAX_YEAR = 1900, 2100
 
 
 def exif_survey(folder: str) -> list[dict[str, str]]:
@@ -54,6 +77,43 @@ def has_usable_date(row: dict[str, str]) -> bool:
             continue
         return True
     return False
+
+
+def date_out_of_range(value: str) -> bool:
+    """True for a date Photos will refuse, e.g. '108866:11:23 08:30:20'.
+
+    Repair from MediaCreateDate/ModifyDate rather than discarding: in every
+    case seen, only CreateDate was corrupt and the others held the real date.
+    """
+    if value in ("-", "") or len(value) < 4:
+        return False
+    year = value[:4]
+    if not year.isdigit():
+        return True
+    return not (MIN_YEAR <= int(year) <= MAX_YEAR)
+
+
+def content_mismatch(path: str) -> str | None:
+    """Return the detected kind when it contradicts the extension, else None."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in MAGIC and ext not in BMFF_EXT:
+        return None
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(12)
+    except OSError:
+        return None
+    if ext in BMFF_EXT:
+        if head[4:8] == b"ftyp":
+            return None
+        return "JPEG" if head.startswith(b"\xff\xd8\xff") else "unknown"
+    if any(head.startswith(sig) for sig in MAGIC[ext]):
+        return None
+    if head.startswith(b"\xff\xd8\xff"):
+        return "JPEG"
+    if head.startswith(b"\x89PNG"):
+        return "PNG"
+    return "unknown"
 
 
 def group_files(names: list[str]) -> dict[str, set[str]]:
@@ -93,6 +153,15 @@ def main() -> None:
     pairs = [s for s, e in groups.items() if is_pair(e)]
     undated = [r for r in rows if not has_usable_date(r)]
     vp9 = [r["name"] for r in rows if r["codec"] == "vp09"]
+    bad_dates = [
+        r for r in rows
+        if date_out_of_range(r["dto"]) or date_out_of_range(r["create"])
+    ]
+    mislabelled = []
+    for name in names:
+        kind = content_mismatch(os.path.join(folder, name))
+        if kind:
+            mislabelled.append((name, kind))
 
     print(f"folder: {folder}")
     print(f"  files:                      {len(rows)}")
@@ -107,6 +176,16 @@ def main() -> None:
         hdr, sdr = hdr_videos(folder, vp9)
         print(f"  VP9 needing transcode:      {len(vp9)}  ({len(hdr)} HDR, {len(sdr)} SDR)")
         print("    -> Photos imports VP9 as NOTHING, silently. Transcode first.")
+    if mislabelled:
+        print(f"  extension/content mismatch:  {len(mislabelled)}")
+        print("    -> exiftool will REFUSE to write these. Rename before dating.")
+        for name, kind in mislabelled[:10]:
+            print(f"    {name:<50} is really {kind}")
+    if bad_dates:
+        print(f"  dates Photos will REJECT:   {len(bad_dates)}")
+        print("    -> fails the whole import chunk; repair from MediaCreateDate.")
+        for r in bad_dates[:10]:
+            print(f"    {r['name']:<50} {r['dto']} / {r['create']}")
     if undated:
         print("\n  undated files (first 20):")
         for r in undated[:20]:

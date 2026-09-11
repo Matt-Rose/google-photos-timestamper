@@ -59,6 +59,57 @@ class TestDateFromFilename:
         assert recover_dates.date_from_filename(name) is None
 
 
+class TestDateOutOfRange:
+    @pytest.mark.parametrize(
+        "value",
+        [
+            # Real corrupt QuickTime CreateDate values. Photos rejects these
+            # with "date value out of range" and fails the whole import chunk.
+            "108866:11:23 08:30:20",
+            "29946:02:01 16:58:48",
+            "0000:00:00 00:00:00",
+        ],
+    )
+    def test_rejects(self, value):
+        assert album_survey.date_out_of_range(value) is True
+
+    @pytest.mark.parametrize(
+        "value",
+        ["2016:11:21 22:42:00", "1985:06:01 00:00:00", "-", ""],
+    )
+    def test_accepts_plausible_and_empty(self, value):
+        assert album_survey.date_out_of_range(value) is False
+
+
+class TestContentMismatch:
+    def _write(self, tmp_path, name, data):
+        p = tmp_path / name
+        p.write_bytes(data)
+        return str(p)
+
+    def test_jpeg_named_heic_is_caught(self, tmp_path):
+        """Google serves JPEG bytes under .HEIC; exiftool then refuses writes."""
+        path = self._write(tmp_path, "IMG_1.HEIC", b"\xff\xd8\xff\xe0" + b"\x00" * 8)
+        assert album_survey.content_mismatch(path) == "JPEG"
+
+    def test_real_heic_passes(self, tmp_path):
+        """HEIC is ISO-BMFF: 'ftyp' sits at offset 4, not offset 0."""
+        path = self._write(tmp_path, "IMG_2.HEIC", b"\x00\x00\x00\x18ftypheic")
+        assert album_survey.content_mismatch(path) is None
+
+    def test_jpeg_named_png_is_caught(self, tmp_path):
+        path = self._write(tmp_path, "shot.png", b"\xff\xd8\xff\xe0" + b"\x00" * 8)
+        assert album_survey.content_mismatch(path) == "JPEG"
+
+    def test_real_png_passes(self, tmp_path):
+        path = self._write(tmp_path, "shot.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 4)
+        assert album_survey.content_mismatch(path) is None
+
+    def test_unknown_extension_ignored(self, tmp_path):
+        path = self._write(tmp_path, "clip.mov", b"whatever1234")
+        assert album_survey.content_mismatch(path) is None
+
+
 class TestAspect:
     def test_survives_downscaling(self):
         """The download is often a downscale of the reference copy."""
