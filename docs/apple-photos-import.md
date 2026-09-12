@@ -234,6 +234,22 @@ Useful queries:
 **Never compare raw `ZGENERICALBUM` counts between libraries.** They are
 dominated by kind-1510 import sessions. Compare `ZKIND=2`.
 
+### The content hash column was renamed
+
+Photos stores a content hash per asset, which is what `--skip-dups` and
+osxphotos' `FingerprintQuery` match on. The column moved:
+
+    up to Photos  9.6   ZADDITIONALASSETATTRIBUTES.ZMASTERFINGERPRINT
+    from Photos   9.9   ZADDITIONALASSETATTRIBUTES.ZORIGINALSTABLEHASH
+
+Ask osxphotos rather than hard-coding either name:
+
+    from osxphotos._constants import _DB_TABLE_NAMES
+    _DB_TABLE_NAMES[query.photos_version]["MASTER_FINGERPRINT"]
+
+Hard-coding `ZMASTERFINGERPRINT` against a current library raises
+`no such column`, which reads like a corrupt database rather than a rename.
+
 ### iCloud Shared Albums live in `ZSHARE`, not `ZGENERICALBUM`
 
     -- the shared albums themselves (ZSCOPETYPE 0 = shared album, 4 = Shared Library)
@@ -352,6 +368,62 @@ is a far more reliable check than set differences on names.
 
 Note also that `ZCACHEDCOUNT` on `ZGENERICALBUM` lags. Count the join table
 (`Z_<n>ASSETS`) for a true membership figure.
+
+## Bulk import: prune first, then import what is left
+
+The album work above imports a few thousand curated files. The bulk phase is
+different in kind: a whole Takeout export where *most* files are already in
+the library, because the albums were imported first and Takeout duplicates
+every album file into its year folders as well.
+
+Handing the whole tree to `osxphotos import --skip-dups` is correct but
+unwise at that size. Skipping is not free — osxphotos still hashes every file
+to decide — so the run costs the same disk reads as a real import, takes many
+hours, and any interruption leaves you guessing how far it got. Worse, the
+dedup decision is invisible: you cannot tell afterwards which files were
+skipped because they were already there and which were skipped for some other
+reason.
+
+`tools/prune_imported.py` splits that into two cheap, verifiable halves:
+
+    # decide, writing a resumable ledger; moves nothing
+    <venv>/bin/python tools/prune_imported.py SOURCE LIBRARY.photoslibrary
+
+    # act on the ledger
+    <venv>/bin/python tools/prune_imported.py SOURCE LIBRARY.photoslibrary --move-to DIR
+
+What is left in `SOURCE` afterwards is genuinely new, so the import that
+follows is short, and its expected asset count is known in advance — which is
+the only way to verify an import (see "Verifying an import: filenames lie").
+
+Four things the tool gets right that cost real time to learn:
+
+* **`FingerprintQuery` copies the whole `Photos.sqlite` on construction.**
+  Build it once and reuse it. Constructing it per file would copy a multi-GB
+  database once per file.
+* **Measure the hash coverage; do not trust the folklore.** osxphotos' own
+  source says Photos hashes photos but not videos, which would make hashing a
+  video pure waste. Measured on a Photos 11.1 library it is no longer true:
+
+        library hash coverage (column ZORIGINALSTABLEHASH):
+          photo    61812 assets,   56309 hashed (91.1%)
+          video     3559 assets,    3095 hashed (87.0%)
+
+  Skipping video hashes on that library would have matched videos by filename
+  and size alone. `--report-only` prints this, so check it rather than assume.
+* **Always fall back to filename + size.** Coverage is not 100% — roughly 9%
+  of assets here carry no hash — so the fallback is doing real work, not just
+  covering videos. It is weaker than a hash; osxphotos' own
+  `possible_duplicates` makes the same trade.
+* **Prune by Live Photo group, not by file.** A still already in the library
+  cannot be retrofitted into a Live Photo, so importing its orphaned video
+  adds a duplicate video asset rather than motion. If the still is present,
+  drop the video with it. The converse does not hold: a present video does
+  not make a missing still unwanted.
+
+The ledger is flushed per line and re-read on start, so an interrupted pass
+costs only the files it had not reached. Keep it — it is also the audit trail
+for why any given file was not imported.
 
 ## Things that are not the problem
 

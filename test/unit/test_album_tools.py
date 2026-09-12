@@ -14,6 +14,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
 
 import album_survey  # noqa: E402
+import prune_imported  # noqa: E402
 import sharing_status  # noqa: E402
 import recover_dates  # noqa: E402
 
@@ -200,3 +201,73 @@ class TestSharingStatus:
     def test_empty_album_is_not_reported_as_having_private_items(self):
         """An album with no assets must not read as 0/0 still private."""
         assert sharing_status.classify(0, 0, None, []) == sharing_status.NO_SHARED_ALBUM
+
+
+class TestMediaFiles:
+    def test_finds_media_and_skips_everything_else(self, tmp_path):
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "a.JPG").write_bytes(b"x")
+        (tmp_path / "sub" / "a.mp4").write_bytes(b"x")
+        (tmp_path / "notes.txt").write_bytes(b"x")
+        (tmp_path / "sidecar.json").write_bytes(b"x")
+        assert prune_imported.media_files(str(tmp_path)) == [
+            os.path.join("sub", "a.JPG"),
+            os.path.join("sub", "a.mp4"),
+        ]
+
+    def test_skips_dotfiles_and_dot_directories(self, tmp_path):
+        (tmp_path / ".hidden").mkdir()
+        (tmp_path / ".hidden" / "a.jpg").write_bytes(b"x")
+        (tmp_path / "._resource.jpg").write_bytes(b"x")
+        (tmp_path / "real.jpg").write_bytes(b"x")
+        assert prune_imported.media_files(str(tmp_path)) == ["real.jpg"]
+
+
+class TestLedger:
+    def test_round_trips_decisions(self, tmp_path):
+        ledger = tmp_path / "l.tsv"
+        ledger.write_text("a.jpg\tpresent\thash\tUUID-1\nb.jpg\tnew\t\t\n")
+        assert prune_imported.read_ledger(str(ledger)) == {
+            "a.jpg": "present",
+            "b.jpg": "new",
+        }
+
+    def test_missing_ledger_is_empty_not_an_error(self, tmp_path):
+        assert prune_imported.read_ledger(str(tmp_path / "nope.tsv")) == {}
+
+    def test_ignores_a_truncated_final_line(self, tmp_path):
+        """An interrupted run can leave a partial line; it must not crash."""
+        ledger = tmp_path / "l.tsv"
+        ledger.write_text("a.jpg\tpresent\thash\tUUID-1\nb.jp")
+        assert prune_imported.read_ledger(str(ledger)) == {"a.jpg": "present"}
+
+
+class TestOrphanedVideos:
+    def test_video_is_orphaned_when_its_still_is_present(self):
+        files = ["IMG_1.HEIC", "IMG_1.MOV"]
+        decisions = {"IMG_1.HEIC": prune_imported.PRESENT, "IMG_1.MOV": prune_imported.NEW}
+        assert prune_imported.orphaned_videos(decisions, files) == {"IMG_1.MOV"}
+
+    def test_video_is_kept_when_its_still_is_also_new(self):
+        files = ["IMG_1.HEIC", "IMG_1.MOV"]
+        decisions = {"IMG_1.HEIC": prune_imported.NEW, "IMG_1.MOV": prune_imported.NEW}
+        assert prune_imported.orphaned_videos(decisions, files) == set()
+
+    def test_a_present_video_does_not_orphan_a_missing_still(self):
+        files = ["IMG_1.HEIC", "IMG_1.MOV"]
+        decisions = {"IMG_1.HEIC": prune_imported.NEW, "IMG_1.MOV": prune_imported.PRESENT}
+        assert prune_imported.orphaned_videos(decisions, files) == set()
+
+    def test_standalone_video_is_never_orphaned(self):
+        files = ["clip.mp4"]
+        assert prune_imported.orphaned_videos({"clip.mp4": prune_imported.NEW}, files) == set()
+
+    def test_pairing_does_not_cross_directories(self):
+        """Same stem in two albums is two different photographs."""
+        files = [os.path.join("a", "IMG_1.HEIC"), os.path.join("b", "IMG_1.MOV")]
+        decisions = {
+            os.path.join("a", "IMG_1.HEIC"): prune_imported.PRESENT,
+            os.path.join("b", "IMG_1.MOV"): prune_imported.NEW,
+        }
+        assert prune_imported.orphaned_videos(decisions, files) == set()
+

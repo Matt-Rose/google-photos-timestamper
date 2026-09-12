@@ -12,6 +12,14 @@ migration. Full pytest suite in place (`pixi run test` / `pixi run test-all`).
 Known correctness bugs from the original script have been fixed; see "Fixed
 gotchas" below before assuming similar-looking code elsewhere is still broken.
 
+**Migration status, 2026-09-12.** Phase one (metadata restore) and phase two
+(album import) are done: 37 Google shared albums downloaded, prepared and
+imported. What remains is manual GUI work — moving albums into the Shared
+Library and creating iCloud Shared Albums, neither of which is scriptable —
+tracked with `tools/sharing_status.py`. Phase three is the bulk import of a
+second, much larger Takeout with no album structure; `tools/prune_imported.py`
+is the front half of that and has not yet been run at scale.
+
 ## Architecture notes
 
 - Flat `main.py` at the repo root (no `src/` package layout) — deliberate,
@@ -125,14 +133,28 @@ supporting code in `tools/`:
   the Shared Library but with no iCloud Shared Album, shared album present but
   missing items, or fully shared and therefore deletable. Filenames are the
   only usable join, because a shared album holds its own copies and shares no
-  asset identity with the private album.
+  asset identity with the private album. Its counts are only meaningful once
+  uploads have settled — a shared album's membership wobbles for hours after
+  it is created, and a *moving* shortfall means sync, not failure.
+- **`tools/prune_imported.py`** — for the bulk phase: decides which files in
+  an import tree are already in the library, writing a resumable ledger, and
+  optionally moves them aside so only genuinely new files are handed to
+  osxphotos. Hashes photos but not videos (Photos stores no hash for videos,
+  so hashing them reads every byte for nothing), and prunes Live Photo pairs
+  as groups.
 - **`tools/sitecustomize.py`** + **`tools/osxphotos-safe`** — the killall
   suppression and a wrapper that loads it correctly.
 
 These tools shell out to `osxphotos`, `exiftool` and `ffmpeg` and drive
 Photos.app; they are deliberately not unit-tested end to end. `test/unit/
 test_photos_import.py` covers the pure logic — chunking (which must never
-split a Live Photo pair) and daemon CPU summing.
+split a Live Photo pair) and daemon CPU summing — and `test/unit/
+test_album_tools.py` covers the matching and classification logic in the
+survey, date-recovery, sharing-status and prune tools.
+
+`prune_imported.py` imports osxphotos lazily inside `load_osxphotos()` rather
+than at module level, specifically so the module stays importable (and
+testable) without it. Keep it that way.
 
 ## Testing
 
