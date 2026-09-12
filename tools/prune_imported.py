@@ -113,7 +113,11 @@ def media_files(root: str) -> list[str]:
 
 
 def read_ledger(path: str) -> dict[str, str]:
-    """Decisions already made, so a re-run picks up where it stopped."""
+    """Decisions already made, so a re-run picks up where it stopped.
+
+    Later lines win, which is what lets the orphan pass override an earlier
+    ``new`` for the same file.
+    """
     done: dict[str, str] = {}
     if not os.path.exists(path):
         return done
@@ -123,6 +127,17 @@ def read_ledger(path: str) -> dict[str, str]:
             if len(parts) >= 2:
                 done[parts[0]] = parts[1]
     return done
+
+
+def still_to_decide(files: list[str], decisions: dict[str, str]) -> list[str]:
+    """Files needing a decision: undecided ones, plus previous failures.
+
+    A failure is usually transient -- a disk hiccup on a 728 GB external drive,
+    a file being written while the pass ran. Treating it as final would leave
+    the file permanently undecided in the ledger and silently skipped by every
+    resume, so failures are always retried.
+    """
+    return [f for f in files if decisions.get(f, FAILED) == FAILED]
 
 
 def classify(query, fingerprint, root: str, rel: str, hash_videos: bool):
@@ -188,7 +203,7 @@ def main() -> None:
     ledger_path = args.ledger or os.path.join(args.source, ".prune-ledger.tsv")
     decisions = read_ledger(ledger_path)
     files = media_files(args.source)
-    todo = [f for f in files if f not in decisions]
+    todo = still_to_decide(files, decisions)
     print(f"\n{len(files)} media files, {len(todo)} still to decide", file=sys.stderr)
 
     started, done = time.time(), 0
@@ -223,6 +238,12 @@ def main() -> None:
     if not args.move_to:
         print("dry run -- pass --move-to DIR to move the present/orphan files aside")
         return
+
+    if os.path.exists(args.move_to) and (
+        os.stat(args.move_to).st_dev != os.stat(args.source).st_dev
+    ):
+        print("warning: --move-to is on a different volume, so this copies "
+              "rather than renames -- expect it to take hours", file=sys.stderr)
 
     moved = 0
     for rel, decision in sorted(decisions.items()):

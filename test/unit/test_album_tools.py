@@ -271,3 +271,21 @@ class TestOrphanedVideos:
         }
         assert prune_imported.orphaned_videos(decisions, files) == set()
 
+
+class TestStillToDecide:
+    def test_undecided_files_are_queued(self):
+        assert prune_imported.still_to_decide(["a.jpg", "b.jpg"], {}) == ["a.jpg", "b.jpg"]
+
+    def test_decided_files_are_skipped(self):
+        decisions = {"a.jpg": prune_imported.PRESENT, "b.jpg": prune_imported.NEW}
+        assert prune_imported.still_to_decide(["a.jpg", "b.jpg", "c.jpg"], decisions) == ["c.jpg"]
+
+    def test_failures_are_retried(self):
+        """A disk hiccup must not permanently strand a file as undecided."""
+        decisions = {"a.jpg": prune_imported.FAILED, "b.jpg": prune_imported.NEW}
+        assert prune_imported.still_to_decide(["a.jpg", "b.jpg"], decisions) == ["a.jpg"]
+
+    def test_orphans_are_not_retried(self):
+        decisions = {"a.mov": prune_imported.ORPHAN}
+        assert prune_imported.still_to_decide(["a.mov"], decisions) == []
+
