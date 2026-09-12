@@ -14,6 +14,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
 
 import album_survey  # noqa: E402
+import sharing_status  # noqa: E402
 import recover_dates  # noqa: E402
 
 
@@ -165,3 +166,37 @@ class TestGrouping:
 def test_rms_identical_is_zero():
     sig = [0.5, -0.5, 1.0, -1.0]
     assert recover_dates.rms(sig, sig) == 0.0
+
+
+class TestSharingStatus:
+    def test_column_match_rejects_the_key_asset_table(self):
+        """Z_32KEYASSETS has a column containing both ALBUM and ASSET.
+
+        A substring test picks that table and every album then reports a
+        handful of members instead of its real count -- a quiet wrong answer.
+        """
+        key_asset_cols = ["Z_32ALBUMSBEINGKEYASSETS", "Z_3KEYASSETS", "Z_FOK_3KEYASSETS"]
+        assert not any(sharing_status.ALBUM_COL.match(c) for c in key_asset_cols)
+        assert not any(sharing_status.ASSET_COL.match(c) for c in key_asset_cols)
+
+    def test_column_match_accepts_the_membership_table(self):
+        cols = ["Z_33ALBUMS", "Z_3ASSETS", "Z_FOK_3ASSETS"]
+        assert [c for c in cols if sharing_status.ALBUM_COL.match(c)] == ["Z_33ALBUMS"]
+        assert [c for c in cols if sharing_status.ASSET_COL.match(c)] == ["Z_3ASSETS"]
+
+    def test_private_items_outrank_everything(self):
+        assert sharing_status.classify(220, 17, 99, []) == sharing_status.HAS_PRIVATE
+
+    def test_no_shared_album(self):
+        assert sharing_status.classify(50, 50, None, []) == sharing_status.NO_SHARED_ALBUM
+
+    def test_shared_album_incomplete(self):
+        got = sharing_status.classify(165, 165, 7, ["IMG_1.HEIC"])
+        assert got == sharing_status.SHARED_INCOMPLETE
+
+    def test_deletable_only_when_everything_lines_up(self):
+        assert sharing_status.classify(8, 8, 7, []) == sharing_status.DELETABLE
+
+    def test_empty_album_is_not_reported_as_having_private_items(self):
+        """An album with no assets must not read as 0/0 still private."""
+        assert sharing_status.classify(0, 0, None, []) == sharing_status.NO_SHARED_ALBUM

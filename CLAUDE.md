@@ -120,6 +120,12 @@ supporting code in `tools/`:
   silently, and a naive H.264 encode of an HLG source produces 8-bit data
   still tagged as HDR.
 - **`tools/photos_import.py`** — import harness implementing the safeguards.
+- **`tools/sharing_status.py`** — read-only report placing each private album
+  in one of four states: still has items outside the Shared Library, fully in
+  the Shared Library but with no iCloud Shared Album, shared album present but
+  missing items, or fully shared and therefore deletable. Filenames are the
+  only usable join, because a shared album holds its own copies and shares no
+  asset identity with the private album.
 - **`tools/sitecustomize.py`** + **`tools/osxphotos-safe`** — the killall
   suppression and a wrapper that loads it correctly.
 
