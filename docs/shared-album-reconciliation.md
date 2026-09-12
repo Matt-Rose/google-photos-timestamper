@@ -308,6 +308,39 @@ guaranteed clean but loses its comment history and re-uploads everything.
 Recreating is right when the overlap is near-total; the gap approach is
 right when it is not.
 
+## A new shared album's count is not stable for a while
+
+A shared album uploads its own copy of every item, so membership appears
+incrementally and the count *wobbles* while it settles. Observed on one
+165-item album over an afternoon: short by 1, then short by 1 but a
+*different* file, then short by 4. Nothing was wrong; the uploads were still
+in flight, and re-reading the database mid-flight just samples a moving
+target.
+
+The tell is that the shortfall **moves**. A genuine failure is stable: the
+same file missing every time you look. A moving shortfall is sync.
+
+So: create the shared albums, leave them alone for a good while, and only
+then run `tools/sharing_status.py` once and act on what it says. Checking as
+you go mostly measures noise, and acting on that noise means re-adding items
+that were already on their way.
+
+Two things make this slower than it looks: items whose originals are not
+downloaded locally must be fetched from iCloud before they can be uploaded
+again, and the whole thing competes with `mediaanalysisd` for the same disk.
+
+## `sharing_status.py` reports by title, and ignores folders
+
+Albums nested in a Photos *folder* are not visible in the root album list in
+the GUI, but they are ordinary `ZGENERICALBUM` rows and the tool reports them
+like any other. An album that looks stalled at "still has items outside the
+Shared Library" may simply be one you have filed away and stopped looking at
+— in this migration, five albums sat in an `Old Albums` folder and looked
+abandoned for a day.
+
+The tool does not print the folder path. If a reported album is not where you
+expect it, search for it by name rather than assuming the tool is wrong.
+
 ## Files that will not resolve
 
 Expect a small tail that no method reaches: crops (the download is a cropped
