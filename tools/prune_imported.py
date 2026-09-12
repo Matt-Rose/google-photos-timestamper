@@ -1,11 +1,17 @@
 """Find which files in an import tree are already in a Photos library.
 
-Written for the bulk phase: a Takeout export of ~284k files where most are
-duplicates of album files imported earlier. Handing the whole tree to
-osxphotos with ``--skip-dups`` "works", but skipping is not free -- it still
-hashes every file, and a run that long will be interrupted. Pruning first
-turns one enormous unverifiable run into a cheap decision pass plus a short
-import of only what is genuinely new.
+Written for the bulk phase of a Takeout migration: find the files that are
+already in the library so they need not be imported again.
+
+**Sample before running this over a large tree.** ``osxphotos --skip-dups``
+already hashes every file to decide whether to skip it, and so does this, so
+pruning does not save that work -- it repeats it in advance. It pays only when
+the duplicate rate is high enough that shrinking the fragile import run is
+worth a second full pass over the data. Measured on one real 281,374-file
+export the rate was 14%, which made a 9-hour pass a bad trade; but it was 60%
+in the most recent year folders, which made a two-hour pass over just those a
+good one. Stratify the sample by folder, or an unhelpful average will hide a
+worthwhile subset. See docs/apple-photos-import.md.
 
 Usage::
 

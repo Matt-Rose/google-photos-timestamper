@@ -369,22 +369,61 @@ is a far more reliable check than set differences on names.
 Note also that `ZCACHEDCOUNT` on `ZGENERICALBUM` lags. Count the join table
 (`Z_<n>ASSETS`) for a true membership figure.
 
-## Bulk import: prune first, then import what is left
+## Bulk import: measure the duplicate rate before deciding to prune
 
-The album work above imports a few thousand curated files. The bulk phase is
-different in kind: a whole Takeout export where *most* files are already in
-the library, because the albums were imported first and Takeout duplicates
-every album file into its year folders as well.
+The album work above imports a few thousand curated files. The bulk phase is a
+whole Takeout export, and the obvious optimisation is to find the files that
+are already in the library and remove them before importing. `tools/
+prune_imported.py` does that. **Sample first, because the optimisation usually
+does not pay.**
 
-Handing the whole tree to `osxphotos import --skip-dups` is correct but
-unwise at that size. Skipping is not free — osxphotos still hashes every file
-to decide — so the run costs the same disk reads as a real import, takes many
-hours, and any interruption leaves you guessing how far it got. Worse, the
-dedup decision is invisible: you cannot tell afterwards which files were
-skipped because they were already there and which were skipped for some other
-reason.
+`osxphotos import --skip-dups` already hashes every file to decide whether to
+skip it. A prune pass hashes every file too. So pruning does not *save* that
+work — it does the same work in advance, and the duplicates it removes were
+only ever going to cost a hash each anyway; a skipped file never reaches the
+slow, hang-prone AppleScript path. Pruning pays only when the duplicate rate
+is high enough that shrinking the fragile import is worth a second full pass
+over the data.
 
-`tools/prune_imported.py` splits that into two cheap, verifiable halves:
+Measured on a real 281,374-file Takeout against the library it was destined
+for — a random 600-file sample, about a minute of hashing:
+
+    new           516  (86.0%)
+    present        84  (14.0%)
+    throughput    8.7 files/s, 22.2 MB/s
+    => full prune pass ~9 hours, to remove ~39,000 files
+
+At 14% that is a bad trade, and the decision took minutes rather than hours.
+**Sample before committing to the pass.** A few hundred files chosen at random
+across the tree estimates the rate to within a few percent, and that estimate
+is also the pre-flight asset count needed to verify the import afterwards —
+which was the prune's other selling point (see "Verifying an import: filenames
+lie").
+
+### The rate is not uniform, so stratify the sample
+
+A second sample, 45 files per top-level folder, showed the duplicates were
+concentrated almost entirely in recent years:
+
+    Photos from 2019-2023    0.0% - 6.7%      ~136,000 files
+    Photos from 2024        35.6%              26,717 files
+    Photos from 2025-2026   60.0%              32,183 files
+    album folders           50% - 100%          3,655 files
+
+The reason is mundane and worth recognising elsewhere: iCloud Photos only
+started syncing this library properly around 2024, so recent photographs exist
+on both sides while older ones only ever lived in Google. The album folders are
+high because they had already been imported.
+
+That shape changes the answer. Scanning only the folders above ~35% costs about
+two hours instead of nine and captures roughly 80% of the available saving. A
+flat 14% average would have hidden this entirely — **stratify by folder, or the
+average will make a worthwhile subset look like a bad deal.**
+
+The album folders scoring 50-100% is also a useful correctness check: those
+files were known to be in the library, and the hash matching found them.
+
+### Using the tool
 
     # decide, writing a resumable ledger; moves nothing
     <venv>/bin/python tools/prune_imported.py SOURCE LIBRARY.photoslibrary
@@ -392,9 +431,13 @@ reason.
     # act on the ledger
     <venv>/bin/python tools/prune_imported.py SOURCE LIBRARY.photoslibrary --move-to DIR
 
-What is left in `SOURCE` afterwards is genuinely new, so the import that
-follows is short, and its expected asset count is known in advance — which is
-the only way to verify an import (see "Verifying an import: filenames lie").
+Point it at a subtree rather than the whole export when the stratified sample
+says the yield is concentrated.
+
+**If the import is driven by batch file lists** rather than by walking a tree
+— which is how a paced, one-batch-at-a-time harness works — then moving files
+out from under those lists invalidates them. Filter the lists instead; the
+ledger has everything needed to do so.
 
 Four things the tool gets right that cost real time to learn:
 
