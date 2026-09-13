@@ -341,6 +341,32 @@ abandoned for a day.
 The tool does not print the folder path. If a reported album is not where you
 expect it, search for it by name rather than assuming the tool is wrong.
 
+## Deleting the private album is safe; losing the reference is the cost
+
+A shared album holds its **own** copies of every item, so it is not a view onto
+the private album and does not depend on it. Deleting the private album leaves
+the shared album completely intact -- verified across 17 albums whose private
+counterparts had been deleted, every one still holding its full asset count:
+
+    51 Rathcoole        125 declared, 125 present
+    Miranda!          1,712 declared, 1,712 present
+    Sylvia!           1,171 declared, 1,171 present
+    ... 14 more, all exact
+
+Acceptance is irrelevant to this. An unaccepted invitation means the recipient
+cannot *see* the album yet; the album and its uploaded copies exist regardless,
+and the invitation can be re-sent at any time.
+
+What deleting the private album actually costs is the **reference**. Filenames
+are the only usable join between a private album and its shared counterpart
+(see above), so once the private album is gone there is nothing left to compare
+against and `sharing_status.py` can no longer tell you whether the shared album
+is complete. It reports `private album no longer exists` and stops there.
+
+So the rule is **verify completeness, then delete** -- not "wait for
+acceptance". Getting this backwards costs nothing; getting it forwards, and
+deleting before checking, quietly forfeits the only check available.
+
 ## Files that will not resolve
 
 Expect a small tail that no method reaches: crops (the download is a cropped

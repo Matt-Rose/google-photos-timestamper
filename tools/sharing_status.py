@@ -248,8 +248,9 @@ def main() -> None:
                 for name in missing:
                     print(f"      missing: {name}")
 
-    # The actionable cross-cutting view: a shared album nobody has accepted is
-    # not yet doing its job, whatever state the rest of the report puts it in.
+    # A shared album nobody has accepted is not yet visible to anyone, whatever
+    # state the rest of the report puts it in. This is NOT a reason to keep the
+    # private album -- see the note printed below.
     pending = sorted(
         (title, awaiting_acceptance(people))
         for rows in buckets.values()
@@ -258,10 +259,16 @@ def main() -> None:
     )
     if pending:
         print(f"\nAWAITING ACCEPTANCE  ({len(pending)})")
-        print("  The invitation reaches an Apple ID in Photos itself, not only by")
-        print("  email -- so these are accepted on the recipient's device.")
+        print("  Created and populated, but not yet visible to the recipient. An")
+        print("  invitation to an address that is already an Apple ID appears in")
+        print("  Photos on their devices, not only by email.")
         for title, who in pending:
             print(f"  {title:<38} {', '.join(who)}")
+        print("\n  This does not block deleting the private album: a shared album")
+        print("  holds its own copies and survives the private album's deletion")
+        print("  intact, accepted or not. What you lose by deleting is the ability")
+        print("  to check the shared album is COMPLETE -- the private album is the")
+        print("  reference this report compares against. Verify first, then delete.")
     print()
 
 
