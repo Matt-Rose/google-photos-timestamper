@@ -177,10 +177,31 @@ these five per-user agents all attach:
     com.apple.mediaanalysisd         com.apple.cloudphotod
     com.apple.mediastream.mstreamd
 
-`launchctl bootout gui/$UID/<label>` stops one; `launchctl bootstrap gui/$UID
-/System/Library/LaunchAgents/<label>.plist` puts it back, and logging out and
-in restores anything that refuses. Restore them *before* reopening Photos, or
-it reopens against a library whose owning daemon is gone.
+**None of those can be stopped.** System Integrity Protection refuses both
+mechanisms, so any plan built on suspending them is dead on arrival:
+
+    launchctl bootout gui/$UID/com.apple.mediaanalysisd
+    -> Boot-out failed: 150: Operation not permitted while SIP is engaged
+
+    launchctl kill SIGTERM gui/$UID/com.apple.mediaanalysisd
+    -> Not privileged to signal service.
+
+`com.apple.photolibraryd` also declares `KeepAlive`, so even a successful kill
+would be undone immediately.
+
+**What releases them is logging the user out** — the whole login session goes,
+and with it every connection. Fast user switching is not enough: a switched-away
+session keeps all its daemons running. So the working sequence for a library
+belonging to another user is: log that user out, checkpoint from an account that
+can reach the volume, log them back in.
+
+The saving grace is that an idle connection does not block a checkpoint at all:
+
+    connection merely open, no transaction    0|0|0     log -> 0 bytes
+    connection in an active transaction       1|168|168 log unchanged
+
+So retrying for a minute or two often succeeds on its own, by catching a busy
+daemon between transactions. Retry before resorting to a logout.
 
 Killing Photos outright is safe for the database. The log exists exactly so an
 abrupt stop loses nothing; the next open replays it.
