@@ -289,3 +289,44 @@ class TestStillToDecide:
         decisions = {"a.mov": prune_imported.ORPHAN}
         assert prune_imported.still_to_decide(["a.mov"], decisions) == []
 
+
+class TestDescribeParticipant:
+    def test_email_is_preferred_over_phone(self):
+        assert sharing_status.describe_participant("a@b.com", "447700900123", 2) == \
+            "a@b.com (accepted)"
+
+    def test_phone_only_is_shown_with_a_plus(self):
+        assert sharing_status.describe_participant(None, "447700900123", 2) == \
+            "+447700900123 (accepted)"
+
+    def test_an_already_formatted_number_does_not_get_a_second_plus(self):
+        """Photos stores both '447700900123' and '+44 7700 900123'."""
+        assert sharing_status.describe_participant(None, "+44 7700 900123", 1) == \
+            "+44 7700 900123 (invited)"
+
+    def test_invited_but_not_accepted(self):
+        assert sharing_status.describe_participant("a@b.com", None, 1) == "a@b.com (invited)"
+
+    def test_unknown_status_is_shown_raw_not_guessed(self):
+        assert sharing_status.describe_participant("a@b.com", None, 7) == "a@b.com (status 7)"
+
+    def test_no_identity_at_all(self):
+        assert sharing_status.describe_participant(None, None, 1) == "unknown (invited)"
+
+
+class TestAwaitingAcceptance:
+    def test_accepted_participants_are_not_listed(self):
+        assert sharing_status.awaiting_acceptance([("a@b.com (accepted)", 2)]) == []
+
+    def test_invited_participants_are_listed(self):
+        people = [("a@b.com (invited)", 1), ("c@d.com (accepted)", 2)]
+        assert sharing_status.awaiting_acceptance(people) == ["a@b.com (invited)"]
+
+    def test_unknown_status_counts_as_not_accepted(self):
+        """Only status 2 is known to mean accepted; anything else must surface."""
+        assert sharing_status.awaiting_acceptance([("a@b.com (status 7)", 7)]) == \
+            ["a@b.com (status 7)"]
+
+    def test_no_participants_is_empty(self):
+        assert sharing_status.awaiting_acceptance([]) == []
+

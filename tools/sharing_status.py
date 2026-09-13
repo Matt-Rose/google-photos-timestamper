@@ -12,6 +12,10 @@ This prints each album in exactly one of four states::
 
 Read-only: opens the database with mode=ro and never writes.
 
+It also reports who each shared album is shared with and whether they have
+accepted, and ends with an AWAITING ACCEPTANCE list -- an album whose
+invitation is unaccepted looks finished here but is not yet visible to anyone.
+
 Three traps this works around, each of which produced a wrong answer first:
 
 * **A shared album shares no assets with the private album.** It holds its own
@@ -100,6 +104,65 @@ def shared_albums(con: sqlite3.Connection) -> dict[str, int]:
     }
 
 
+# ZSHAREPARTICIPANT.ZACCEPTANCESTATUS. Only these two were observed across 22
+# shares; every "accepted" row also carried a ZSUBSCRIPTIONDATE and every
+# "invited" row had none, which is what pins the mapping. An unknown code is
+# printed raw rather than guessed at.
+ACCEPTANCE = {1: "invited", 2: "accepted"}
+
+
+def describe_participant(email: str | None, phone: str | None, status: int | None) -> str:
+    """One invitee, as 'who (state)'.
+
+    **Which identity is present tells you how the album was shared**, which
+    matters when a recipient has lost access to one of their addresses:
+
+    * email only, or email + phone -> invited by email address
+    * phone only                   -> invited by phone number
+
+    Two phone formats occur and they are not interchangeable. A human-formatted
+    ``+44 7928 313055`` is what someone typed into the invite field. A bare
+    ``447928313055`` is Apple's canonical form, filled in beside the email on
+    some shares once the invitation resolves to a real iCloud account -- it does
+    not mean the phone number was used. Hence: prefer the email whenever there
+    is one, and do not add a ``+`` to a number that already has one.
+    """
+    if email:
+        who = email
+    elif phone:
+        who = phone if phone.startswith("+") else f"+{phone}"
+    else:
+        who = "unknown"
+    state = ACCEPTANCE.get(status, f"status {status}")
+    return f"{who} ({state})"
+
+
+def share_participants(con: sqlite3.Connection) -> dict[int, list[tuple[str, int | None]]]:
+    """Invitees per share, excluding yourself, as {share pk: [(text, status)]}.
+
+    Joins on ``ZSHAREPARTICIPANT.ZSHARE``, not the ``Z<NN>_SHARE`` column beside
+    it -- that one is numbered per Photos version (Z66_SHARE here, Z51/Z54/Z61
+    elsewhere) and points at a different entity. Returns {} on a library with no
+    such table rather than failing, since the rest of the report still works.
+    """
+    out: dict[int, list[tuple[str, int | None]]] = collections.defaultdict(list)
+    try:
+        rows = con.execute(
+            "select ZSHARE, ZEMAILADDRESS, ZPHONENUMBER, ZACCEPTANCESTATUS "
+            "from ZSHAREPARTICIPANT where ZISCURRENTUSER = 0 and ZSHARE is not null"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    for share_pk, email, phone, status in rows:
+        out[share_pk].append((describe_participant(email, phone, status), status))
+    return dict(out)
+
+
+def awaiting_acceptance(participants: list[tuple[str, int | None]]) -> list[str]:
+    """Invitees who have not accepted. An album with none is fully live."""
+    return [text for text, status in participants if status != 2]
+
+
 def classify(private_total, in_shared_library, shared_pk, missing_names):
     if private_total and in_shared_library < private_total:
         return HAS_PRIVATE
@@ -120,6 +183,7 @@ def main() -> None:
     con = connect(args.library)
     join, album_col, asset_col = album_asset_table(con)
     live, shares = live_albums(con), shared_albums(con)
+    invitees = share_participants(con)
 
     if args.albums:
         with open(args.albums) as handle:
@@ -131,7 +195,7 @@ def main() -> None:
     for title in wanted:
         pk = live.get(title)
         if pk is None:
-            buckets["private album no longer exists"].append((title, "", []))
+            buckets["private album no longer exists"].append((title, "", [], []))
             continue
         total = con.execute(
             f"select count(*) from {join} where {album_col}=?", (pk,)
@@ -161,11 +225,12 @@ def main() -> None:
                 n for n in private_names if private_names[n] > shared_names.get(n, 0)
             )
 
+        people = invitees.get(share_pk, []) if share_pk is not None else []
         state = classify(total, in_lib, share_pk, missing)
         detail = f"{in_lib}/{total} in Shared Library"
         if state in (SHARED_INCOMPLETE, DELETABLE):
             detail = f"{total} items, shared album short by {len(missing)}"
-        buckets[state].append((title, detail, missing))
+        buckets[state].append((title, detail, missing, people))
 
     for state in (HAS_PRIVATE, NO_SHARED_ALBUM, SHARED_INCOMPLETE, DELETABLE,
                   "private album no longer exists"):
@@ -173,11 +238,30 @@ def main() -> None:
         if not rows:
             continue
         print(f"\n{state.upper()}  ({len(rows)})")
-        for title, detail, missing in sorted(rows):
+        for title, detail, missing, people in sorted(rows):
             print(f"  {title:<38} {detail}")
+            if people:
+                print(f"      shared with: {', '.join(t for t, _ in people)}")
+            elif state in (SHARED_INCOMPLETE, DELETABLE):
+                print("      shared with: nobody -- the album exists but has no invitees")
             if args.verbose and missing:
                 for name in missing:
                     print(f"      missing: {name}")
+
+    # The actionable cross-cutting view: a shared album nobody has accepted is
+    # not yet doing its job, whatever state the rest of the report puts it in.
+    pending = sorted(
+        (title, awaiting_acceptance(people))
+        for rows in buckets.values()
+        for title, _, _, people in rows
+        if awaiting_acceptance(people)
+    )
+    if pending:
+        print(f"\nAWAITING ACCEPTANCE  ({len(pending)})")
+        print("  The invitation reaches an Apple ID in Photos itself, not only by")
+        print("  email -- so these are accepted on the recipient's device.")
+        for title, who in pending:
+            print(f"  {title:<38} {', '.join(who)}")
     print()
 
 
