@@ -330,3 +330,69 @@ class TestAwaitingAcceptance:
     def test_no_participants_is_empty(self):
         assert sharing_status.awaiting_acceptance([]) == []
 
+
+class TestIntraSetDuplicates:
+    def test_second_copy_of_the_same_content_is_dropped(self):
+        rows = {
+            "Photos from 2019/a.jpg": (prune_imported.NEW, "HASH1"),
+            "album/a.jpg": (prune_imported.NEW, "HASH1"),
+        }
+        assert prune_imported.intra_set_duplicates(rows) == {"album/a.jpg"}
+
+    def test_the_earliest_path_in_sort_order_is_kept(self):
+        rows = {
+            "z.jpg": (prune_imported.NEW, "HASH1"),
+            "a.jpg": (prune_imported.NEW, "HASH1"),
+            "m.jpg": (prune_imported.NEW, "HASH1"),
+        }
+        assert prune_imported.intra_set_duplicates(rows) == {"m.jpg", "z.jpg"}
+
+    def test_different_content_is_not_deduplicated(self):
+        rows = {
+            "a.jpg": (prune_imported.NEW, "HASH1"),
+            "b.jpg": (prune_imported.NEW, "HASH2"),
+        }
+        assert prune_imported.intra_set_duplicates(rows) == set()
+
+    def test_files_already_resolved_against_the_library_are_ignored(self):
+        """A present file is out of the set; it must not claim the hash slot."""
+        rows = {
+            "a.jpg": (prune_imported.PRESENT, "HASH1"),
+            "b.jpg": (prune_imported.NEW, "HASH1"),
+        }
+        assert prune_imported.intra_set_duplicates(rows) == set()
+
+    def test_files_without_a_hash_are_always_kept(self):
+        """--no-video-hash leaves videos uncomparable; never guess."""
+        rows = {
+            "a.mov": (prune_imported.NEW, ""),
+            "b.mov": (prune_imported.NEW, ""),
+        }
+        assert prune_imported.intra_set_duplicates(rows) == set()
+
+
+class TestReadLedgerRows:
+    def test_returns_decision_and_hash(self, tmp_path):
+        ledger = tmp_path / "l.tsv"
+        ledger.write_text("a.jpg\tnew\thash\tHASH1\nb.jpg\tpresent\thash\tUUID-1\n")
+        assert prune_imported.read_ledger_rows(str(ledger)) == {
+            "a.jpg": ("new", "HASH1"),
+            "b.jpg": ("present", "UUID-1"),
+        }
+
+    def test_short_rows_yield_an_empty_hash(self, tmp_path):
+        ledger = tmp_path / "l.tsv"
+        ledger.write_text("a.mov\torphan-video\n")
+        assert prune_imported.read_ledger_rows(str(ledger)) == {"a.mov": ("orphan-video", "")}
+
+
+class TestOrphansAfterIntraSetDedup:
+    def test_video_is_orphaned_when_its_still_is_an_in_set_duplicate(self):
+        """The kept copy of the still pairs with its own video elsewhere."""
+        files = ["album/IMG_1.HEIC", "album/IMG_1.MOV"]
+        decisions = {
+            "album/IMG_1.HEIC": prune_imported.INSET,
+            "album/IMG_1.MOV": prune_imported.NEW,
+        }
+        assert prune_imported.orphaned_videos(decisions, files) == {"album/IMG_1.MOV"}
+

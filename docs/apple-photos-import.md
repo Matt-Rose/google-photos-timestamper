@@ -423,6 +423,47 @@ average will make a worthwhile subset look like a bad deal.**
 The album folders scoring 50-100% is also a useful correctness check: those
 files were known to be in the library, and the hash matching found them.
 
+### A prune can replace `--skip-dups`, but only if it dedupes the set too
+
+The comparison that matters is not "prune *plus* `--skip-dups`" — that really
+would hash everything twice. It is **prune instead of `--skip-dups`**, and then
+each file is hashed exactly once either way:
+
+    no prune, --skip-dups     281k files hashed inside the AppleScript-driven import
+    prune, then import plain  281k files hashed in a read-only pass, then a short import
+
+Same total work, but the second moves it out of the library interaction
+entirely. The prune never launches Photos, cannot hang it, and can be stopped
+and resumed at will. That is the reason to prefer it — not saved hashing. The
+dedup test is identical in both cases: `classify()` does fingerprint then
+filename+size, exactly what osxphotos' `possible_duplicates` does.
+
+**But dropping `--skip-dups` moves one job onto the prune.** Pruning against
+the library removes files Photos already holds; it says nothing about the same
+photograph sitting twice *inside the import set*, and Takeout duplicates every
+album file into its year folders by design. `--skip-dups` catches those because
+the first copy has just been imported. Without it, both go in.
+
+Measured on the same 281,374-file export, by filename and size across the tree:
+
+    distinct (name,size) keys   278,557
+    redundant copies              2,817   (1.0% of the tree)
+      album folder <-> year folder  2,766
+      among album folders only         51
+
+Only 1%, and almost all of it exactly the album/year pairing Takeout creates.
+Note how much smaller that is than the filename-only figure: the tree has
+281,374 files but only 122,841 distinct *names*, which looks like 55%
+duplication until size is taken into account. Most of those collisions are
+genuinely different photographs sharing a camera-assigned name — `IMG_0001.JPG`
+recurs for years. **Never estimate duplication from filenames alone.**
+
+`intra_set_duplicates()` handles this by keeping the hash it already computed
+for every `new` file in the ledger, so deduplicating the set against itself
+costs no extra reads. It runs *before* orphan detection, because a still
+dropped as an in-set duplicate orphans its video just as a still already in the
+library does.
+
 ### Using the tool
 
     # decide, writing a resumable ledger; moves nothing

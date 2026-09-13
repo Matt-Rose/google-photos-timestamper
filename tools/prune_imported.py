@@ -65,6 +65,7 @@ MEDIA_EXT = STILL_EXT | VIDEO_EXT
 PRESENT = "present"        # matched an asset in the library
 ORPHAN = "orphan-video"    # video whose paired still is already in the library
 NEW = "new"                # no match -- import this
+INSET = "dup-in-set"       # a copy of another file in this same import set
 FAILED = "failed"          # could not be read or hashed
 
 
@@ -135,6 +136,21 @@ def read_ledger(path: str) -> dict[str, str]:
     return done
 
 
+def read_ledger_rows(path: str) -> dict[str, tuple[str, str]]:
+    """As read_ledger, but also returns the hash column, for intra-set dedup."""
+    rows: dict[str, tuple[str, str]] = {}
+    if not os.path.exists(path):
+        return rows
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) >= 4:
+                rows[parts[0]] = (parts[1], parts[3])
+            elif len(parts) >= 2:
+                rows[parts[0]] = (parts[1], "")
+    return rows
+
+
 def still_to_decide(files: list[str], decisions: dict[str, str]) -> list[str]:
     """Files needing a decision: undecided ones, plus previous failures.
 
@@ -147,12 +163,19 @@ def still_to_decide(files: list[str], decisions: dict[str, str]) -> list[str]:
 
 
 def classify(query, fingerprint, root: str, rel: str, hash_videos: bool):
-    """Return (decision, method, match) for one file."""
+    """Return (decision, method, match) for one file.
+
+    For a ``new`` file ``match`` is the content hash just computed, not a
+    library UUID. Keeping it is what lets the set be deduplicated against
+    itself afterwards without reading all 700 GB a second time.
+    """
     full = os.path.join(root, rel)
     is_video = os.path.splitext(rel)[1].lower() in VIDEO_EXT
+    digest = ""
     try:
         if not (is_video and not hash_videos):
-            hits = query.photos_by_fingerprint(fingerprint(full))
+            digest = fingerprint(full)
+            hits = query.photos_by_fingerprint(digest)
             if hits:
                 return PRESENT, "hash", hits[0][0]
         size = os.path.getsize(full)
@@ -161,26 +184,68 @@ def classify(query, fingerprint, root: str, rel: str, hash_videos: bool):
             return PRESENT, "name+size", hits[0][0]
     except Exception as exc:                      # unreadable, truncated, gone
         return FAILED, type(exc).__name__, str(exc)[:120]
-    return NEW, "", ""
+    return NEW, "hash", digest
+
+
+def intra_set_duplicates(rows: dict[str, tuple[str, str]]) -> set[str]:
+    """Second and later copies of the same content *within the import set*.
+
+    Pruning against the library removes files Photos already holds. It does
+    nothing about a photograph sitting twice inside the import set, and Takeout
+    duplicates every album file into its year folders by design. ``--skip-dups``
+    catches those because the first copy has just been imported; an import
+    without it would take both. So a prune that intends to REPLACE
+    ``--skip-dups`` has to do this as well.
+
+    Measured on one 281,374-file export: 2,817 redundant copies (1.0%), of
+    which 2,766 were an album folder and a year folder holding the same file.
+
+    ``rows`` maps path -> (decision, hash). Only ``new`` files are considered;
+    anything already resolved against the library is out of the set regardless.
+    The earliest path in sort order is kept so the choice is deterministic.
+    Files with no hash (videos under ``--no-video-hash``) cannot be compared
+    and are always kept.
+    """
+    seen: dict[str, str] = {}
+    duplicates: set[str] = set()
+    for rel in sorted(rows):
+        decision, digest = rows[rel]
+        if decision != NEW or not digest:
+            continue
+        if digest in seen:
+            duplicates.add(rel)
+        else:
+            seen[digest] = rel
+    return duplicates
+
+
+# A still that is not being imported, for either reason, leaves its video with
+# nothing to pair to.
+NOT_IMPORTED = (PRESENT, INSET)
 
 
 def orphaned_videos(decisions: dict[str, str], files: list[str]) -> set[str]:
-    """Videos whose paired still is already in the library.
+    """Videos whose paired still is not being imported.
 
     Pairing is by directory + filename stem, the same rule the chunker in
-    tools/photos_import.py uses. Only a *still* being present orphans the
-    video; a present video does not make a missing still unwanted.
+    tools/photos_import.py uses. A still already in the library cannot be
+    retrofitted into a Live Photo, and a still dropped as a duplicate of a
+    twin elsewhere in the set will pair with *that* copy's video instead --
+    either way the video here would import alone as a silent duplicate.
+
+    Only a *still* orphans the video. A video that is not being imported says
+    nothing about whether a missing still is wanted.
     """
-    present_stills = set()
+    gone_stills = set()
     for rel, decision in decisions.items():
         stem, ext = os.path.splitext(rel)
-        if decision == PRESENT and ext.lower() in STILL_EXT:
-            present_stills.add(stem)
+        if decision in NOT_IMPORTED and ext.lower() in STILL_EXT:
+            gone_stills.add(stem)
     return {
         rel for rel in files
         if os.path.splitext(rel)[1].lower() in VIDEO_EXT
         and decisions.get(rel) == NEW
-        and os.path.splitext(rel)[0] in present_stills
+        and os.path.splitext(rel)[0] in gone_stills
     }
 
 
@@ -229,20 +294,32 @@ def main() -> None:
                 print(f"  {done}/{len(todo)}  {rate:.0f}/s  ~{left/60:.0f} min left",
                       file=sys.stderr)
 
-        # Orphan detection needs the whole picture, so it runs once at the end.
+        # The last two passes need the whole picture, so they run once at the
+        # end, and in this order: a still dropped as an in-set duplicate also
+        # orphans its video, so dedup must settle before orphans are found.
+        rows = read_ledger_rows(ledger_path)
+        for rel in sorted(intra_set_duplicates(rows)):
+            decisions[rel] = INSET
+            ledger.write(f"{rel}\t{INSET}\tsame-hash-elsewhere-in-set\t\n")
+
         orphans = orphaned_videos(decisions, files)
         for rel in sorted(orphans):
             decisions[rel] = ORPHAN
-            ledger.write(f"{rel}\t{ORPHAN}\tpaired-still-present\t\n")
+            ledger.write(f"{rel}\t{ORPHAN}\tpaired-still-not-imported\t\n")
 
     counts = collections.Counter(decisions.values())
     print(f"\n{'decision':<14} files")
-    for decision in (NEW, PRESENT, ORPHAN, FAILED):
+    for decision in (NEW, PRESENT, INSET, ORPHAN, FAILED):
         print(f"{decision:<14} {counts.get(decision, 0)}")
     print(f"\nledger: {ledger_path}")
+    if counts.get(FAILED):
+        print(f"{counts[FAILED]} failures will be retried on the next run")
+    print(f"\n{counts.get(NEW, 0)} files to import. Because in-set duplicates "
+          "are removed too,\nthis set can be imported WITHOUT --skip-dups, so "
+          "nothing is hashed twice.")
 
     if not args.move_to:
-        print("dry run -- pass --move-to DIR to move the present/orphan files aside")
+        print("\ndry run -- pass --move-to DIR to move the excluded files aside")
         return
 
     if os.path.exists(args.move_to) and (
@@ -253,7 +330,7 @@ def main() -> None:
 
     moved = 0
     for rel, decision in sorted(decisions.items()):
-        if decision not in (PRESENT, ORPHAN):
+        if decision not in (PRESENT, INSET, ORPHAN):
             continue
         src = os.path.join(args.source, rel)
         if not os.path.exists(src):
