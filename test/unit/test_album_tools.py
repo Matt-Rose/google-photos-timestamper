@@ -396,3 +396,32 @@ class TestOrphansAfterIntraSetDedup:
         }
         assert prune_imported.orphaned_videos(decisions, files) == {"album/IMG_1.MOV"}
 
+
+class TestConfirmOrphans:
+    """The duration gate that stops real videos being dropped on a name clash."""
+
+    def test_short_video_is_confirmed_as_a_live_photo_companion(self):
+        assert prune_imported.confirm_orphans(
+            {"a/IMG_1.MOV"}, "/root", duration=lambda p: 1.5) == {"a/IMG_1.MOV"}
+
+    def test_long_video_is_kept_for_import(self):
+        assert prune_imported.confirm_orphans(
+            {"a/IMG_1.MOV"}, "/root", duration=lambda p: 25.0) == set()
+
+    def test_the_boundary_is_inclusive(self):
+        assert prune_imported.confirm_orphans(
+            {"a/x.MOV"}, "/root", duration=lambda p: 4.0) == {"a/x.MOV"}
+        assert prune_imported.confirm_orphans(
+            {"a/x.MOV"}, "/root", duration=lambda p: 4.01) == set()
+
+    def test_unmeasurable_file_is_kept_not_dropped(self):
+        """Dropping a real video is silent; importing a duplicate is visible."""
+        assert prune_imported.confirm_orphans(
+            {"a/x.MOV"}, "/root", duration=lambda p: None) == set()
+
+    def test_mixed_batch_splits_correctly(self):
+        durations = {"/root/s.MOV": 2.0, "/root/l.MOV": 30.0, "/root/u.MOV": None}
+        assert prune_imported.confirm_orphans(
+            {"s.MOV", "l.MOV", "u.MOV"}, "/root",
+            duration=lambda p: durations[p]) == {"s.MOV"}
+

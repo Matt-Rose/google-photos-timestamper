@@ -581,11 +581,27 @@ Four things the tool gets right that cost real time to learn:
   of assets here carry no hash — so the fallback is doing real work, not just
   covering videos. It is weaker than a hash; osxphotos' own
   `possible_duplicates` makes the same trade.
-* **Prune by Live Photo group, not by file.** A still already in the library
-  cannot be retrofitted into a Live Photo, so importing its orphaned video
-  adds a duplicate video asset rather than motion. If the still is present,
-  drop the video with it. The converse does not hold: a present video does
-  not make a missing still unwanted.
+* **Prune by Live Photo group — but confirm the pairing, do not assume it.**
+  A still already in the library cannot be retrofitted into a Live Photo, so
+  importing its orphaned video adds a duplicate video rather than motion. The
+  converse does not hold: a present video says nothing about a missing still.
+
+  **Matching on filename stem alone is not safe.** Camera counters wrap, so an
+  unrelated still and video end up sharing a name in the same folder, and the
+  video gets swept out with the still. Measured on 402 of 14,463 candidates
+  from a real export:
+
+        <=4s (Live Photo companion)   379
+        >4s  (a real video)            22    <- 5.5%
+
+  Confirming with `ffprobe` rescued **604 real videos** across the full set,
+  including several over 100 seconds. The separation is clean — genuine
+  companions were 1-2s, the shortest false positive 6s — so a 4-second gate
+  works, and it only has to run over the orphan candidates, not the tree.
+
+  **An unmeasurable file is kept, not dropped.** The errors are asymmetric:
+  importing a duplicate video is visible and reversible, while losing a real
+  one is silent and only discovered when someone goes looking for it.
 
 The ledger is flushed per line and re-read on start, so an interrupted pass
 costs only the files it had not reached. Keep it — it is also the audit trail

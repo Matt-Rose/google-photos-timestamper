@@ -54,6 +54,7 @@ import argparse
 import collections
 import os
 import shutil
+import subprocess
 import sys
 import time
 
@@ -223,6 +224,15 @@ def intra_set_duplicates(rows: dict[str, tuple[str, str]]) -> set[str]:
 # nothing to pair to.
 NOT_IMPORTED = (PRESENT, INSET)
 
+# A Live Photo's video is about three seconds. Anything longer that merely
+# shares a filename stem is an unrelated video that happens to collide --
+# camera counters wrap, so a still and a video can end up with the same name
+# in the same folder. Measured on 402 orphan candidates: 379 were 1-2s
+# companions, 22 were real videos of 6-104s, and the gap between the two
+# groups is clean. Dropping those 22 would have lost about 790 real videos
+# across the full set.
+LIVE_PHOTO_MAX_SECONDS = 4.0
+
 
 def orphaned_videos(decisions: dict[str, str], files: list[str]) -> set[str]:
     """Videos whose paired still is not being imported.
@@ -247,6 +257,35 @@ def orphaned_videos(decisions: dict[str, str], files: list[str]) -> set[str]:
         and decisions.get(rel) == NEW
         and os.path.splitext(rel)[0] in gone_stills
     }
+
+
+def video_duration(path: str) -> float | None:
+    """Duration in seconds, or None if it cannot be determined."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", path],
+            capture_output=True, text=True, timeout=30)
+        return float(out.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def confirm_orphans(candidates, root: str, duration=video_duration,
+                    max_seconds: float = LIVE_PHOTO_MAX_SECONDS) -> set[str]:
+    """Narrow filename-matched orphan candidates to plausible Live Photo videos.
+
+    An unreadable or unmeasurable file is KEPT for import. The two errors are
+    not symmetrical: importing a duplicate video is visible and reversible,
+    while dropping a real one is silent and only discovered when someone goes
+    looking for a video that is not there.
+    """
+    confirmed = set()
+    for rel in sorted(candidates):
+        seconds = duration(os.path.join(root, rel))
+        if seconds is not None and seconds <= max_seconds:
+            confirmed.add(rel)
+    return confirmed
 
 
 def main() -> None:
@@ -314,10 +353,18 @@ def main() -> None:
             decisions[rel] = INSET
             ledger.write(f"{rel}\t{INSET}\tsame-hash-elsewhere-in-set\t\n")
 
-        orphans = orphaned_videos(decisions, files)
+        candidates = orphaned_videos(decisions, files)
+        if candidates:
+            print(f"  checking {len(candidates)} orphan candidates with ffprobe...",
+                  file=sys.stderr, flush=True)
+        orphans = confirm_orphans(candidates, args.source)
         for rel in sorted(orphans):
             decisions[rel] = ORPHAN
-            ledger.write(f"{rel}\t{ORPHAN}\tpaired-still-not-imported\t\n")
+            ledger.write(f"{rel}\t{ORPHAN}\tshort-video-paired-still-not-imported\t\n")
+        kept = len(candidates) - len(orphans)
+        if kept:
+            print(f"  kept {kept} as real videos despite the name collision",
+                  file=sys.stderr, flush=True)
 
     counts = collections.Counter(decisions.values())
     print(f"\n{'decision':<14} files")
