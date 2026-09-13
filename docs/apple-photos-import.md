@@ -149,6 +149,31 @@ A library with a 49 GB WAL imported ~3.4k items successfully while one with a
 26.5 GB WAL failed. The WAL is a real problem for disk space and startup time;
 it was not the discriminator for import success.
 
+### A bloated WAL makes Photos itself nearly unusable
+
+Treat this as a first-line diagnosis, not just an import concern. On a library
+whose log had reached 8.7 GB, the owning account's Photos was *almost
+non-responsive in the GUI* — and became normal immediately after a checkpoint.
+A sluggish-but-alive Photos is a different failure from the 0%-CPU AppleScript
+hang documented above, and this is its most likely cause. Check the `-wal` size
+before investigating anything else.
+
+**WAL size measures churn, not data.** Folding an 8,744 MB log back in grew the
+database by only 137 MB:
+
+    before   database 1,738 MB   log 8,744 MB
+    after    database 1,875 MB   log     0 MB
+
+The log accumulates a fresh copy of a page every time that page is written, so
+a busy library rewrites the same pages thousands of times. Do not infer from a
+huge log that there is a huge amount of unsaved work, and do not size the free
+space you need from the log alone — but do check for it anyway, since the
+checkpoint can in principle need it.
+
+With the owning user logged out, it took a single attempt:
+
+    attempt 1/12: sqlite said '0|0|0'  log 8744 MB -> 0 MB
+
 ### Clearing a bloated WAL: what a checkpoint actually reports
 
 `PRAGMA wal_checkpoint(TRUNCATE)` both folds the log into the database and
