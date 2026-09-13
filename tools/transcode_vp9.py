@@ -15,6 +15,13 @@ re-asserted afterwards because re-encoding does not reliably carry it.
 Usage::
 
     python3 tools/transcode_vp9.py <album-dir> --backup-dir <dir> [--dry-run]
+    python3 tools/transcode_vp9.py --files vp9.txt --root <tree> --backup-dir <dir>
+
+The ``--files`` form takes paths already known to be VP9 (from
+``tools/import_survey.py``), which avoids re-probing every video in a large
+tree. With it, backups mirror the source tree's directory structure -- across
+a whole export basenames repeat (237 files sharing 114 names in one real set),
+so a flat backup directory would silently overwrite originals.
 
 See docs/shared-album-reconciliation.md.
 """
@@ -51,12 +58,32 @@ def find_vp9(folder: str) -> list[str]:
     return found
 
 
-def encode_cmd(src: str, dst: str, is_hdr: bool) -> list[str]:
+# CRF for the HDR path. Measured on a real 6.4 Mbps VP9 source, SSIM against
+# that source:
+#
+#     crf 20   24.9 MB (3.1x)   <- the old default
+#     crf 24   15.8 MB (2.0x)   SSIM 0.9878
+#     crf 26   12.3 MB (1.5x)   SSIM 0.9832
+#
+# The source is already a lossy Google re-encode, so crf 20 was spending three
+# times its size preserving VP9's own compression artefacts. 24 keeps
+# essentially the same SSIM for a third less data, which matters when every
+# byte is also an iCloud upload.
+#
+# Hardware encoding was measured too and rejected: hevc_videotoolbox is 7x
+# faster, but size-matched to the source it scored SSIM 0.9488 against 0.9878,
+# and to match software quality it needed 3x the bytes. It does carry the HDR
+# colour tags correctly, so it remains an option when time beats storage.
+DEFAULT_HDR_CRF = 24
+
+
+def encode_cmd(src: str, dst: str, is_hdr: bool, crf: int = DEFAULT_HDR_CRF) -> list[str]:
     common = ["ffmpeg", "-y", "-loglevel", "error", "-i", src]
     if is_hdr:
         # 10-bit HEVC keeps the bit depth; ffmpeg carries the colour tags
         # through, and hvc1 is the tag Apple needs to play it natively.
-        video = ["-c:v", "libx265", "-crf", "20", "-preset", "medium",
+        # Verified on the output: bt2020nc / arib-std-b67 / bt2020 all survive.
+        video = ["-c:v", "libx265", "-crf", str(crf), "-preset", "medium",
                  "-pix_fmt", "yuv420p10le", "-tag:v", "hvc1"]
     else:
         video = ["-c:v", "libx264", "-crf", "18", "-preset", "medium",
@@ -65,22 +92,46 @@ def encode_cmd(src: str, dst: str, is_hdr: bool) -> list[str]:
                              "-movflags", "+faststart", dst]
 
 
+def backup_path(src: str, root: str, backup_dir: str) -> str:
+    """Where an original goes, mirroring its position under root.
+
+    A flat backup directory is unsafe across a whole export: camera filenames
+    repeat between folders, so the second IMG_5408.MOV would overwrite the
+    first and its original would be gone for good.
+    """
+    rel = os.path.relpath(src, root) if root else os.path.basename(src)
+    return os.path.join(backup_dir, rel)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("album_dir")
+    parser.add_argument("album_dir", nargs="?", help="scan this folder for VP9")
+    parser.add_argument("--files", help="list of known-VP9 paths, one per line")
+    parser.add_argument("--root", help="tree root, so backups mirror its layout")
     parser.add_argument("--backup-dir", required=True)
+    parser.add_argument("--crf", type=int, default=DEFAULT_HDR_CRF,
+                        help=f"HDR quality, lower is bigger (default {DEFAULT_HDR_CRF})")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     from main import write_exif_tags
 
-    names = find_vp9(args.album_dir)
-    print(f"{len(names)} VP9 files in {args.album_dir}")
+    if args.files:
+        with open(args.files, encoding="utf-8") as handle:
+            paths = [l.strip() for l in handle if l.strip()]
+        root = args.root or ""
+    elif args.album_dir:
+        paths = [os.path.join(args.album_dir, n) for n in find_vp9(args.album_dir)]
+        root = args.album_dir
+    else:
+        sys.exit("give either an album directory or --files")
+
+    print(f"{len(paths)} VP9 files to transcode")
     os.makedirs(args.backup_dir, exist_ok=True)
     done = failed = 0
 
-    for i, name in enumerate(names, 1):
-        src = os.path.join(args.album_dir, name)
+    for i, src in enumerate(paths, 1):
+        name = os.path.basename(src)
         is_hdr = probe(src, "stream=color_transfer", "v") == HLG_TRANSFER
         # Read the date BEFORE encoding; a stale value captured earlier in a
         # run silently skips the re-assertion afterwards.
@@ -88,33 +139,36 @@ def main() -> None:
                                 capture_output=True, text=True).stdout.strip()
         label = "HDR->hevc10" if is_hdr else "SDR->h264"
         if args.dry_run:
-            print(f"[{i}/{len(names)}] {name:<40} {label} (dry run)")
+            print(f"[{i}/{len(paths)}] {name:<40} {label} (dry run)", flush=True)
             continue
 
         tmp = src + ".transcode.tmp" + os.path.splitext(name)[1]
+        dest = backup_path(src, root, args.backup_dir)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
         duration = float(probe(src, "format=duration") or 0)
-        result = subprocess.run(encode_cmd(src, tmp, is_hdr), capture_output=True, text=True)
+        result = subprocess.run(encode_cmd(src, tmp, is_hdr, args.crf),
+                                capture_output=True, text=True)
         if result.returncode != 0 or not os.path.exists(tmp):
-            print(f"[{i}/{len(names)}] FAIL {name}: {result.stderr[:100]}")
+            print(f"[{i}/{len(paths)}] FAIL {name}: {result.stderr[:100]}", flush=True)
             failed += 1
             if os.path.exists(tmp):
                 os.remove(tmp)
             continue
         new_duration = float(probe(tmp, "format=duration") or 0)
         if abs(new_duration - duration) > 0.5 or os.path.getsize(tmp) < 10_000:
-            print(f"[{i}/{len(names)}] FAIL {name}: verify ({duration} -> {new_duration})")
+            print(f"[{i}/{len(paths)}] FAIL {name}: verify ({duration} -> {new_duration})", flush=True)
             os.remove(tmp)
             failed += 1
             continue
 
-        shutil.move(src, os.path.join(args.backup_dir, name))
+        shutil.move(src, dest)
         os.rename(tmp, src)
         if before and not before.startswith("0000"):
             when = datetime.strptime(before, "%Y:%m:%d %H:%M:%S").replace(tzinfo=timezone.utc)
             write_exif_tags(src, when.timestamp(), None, None, None)
             os.utime(src, (when.timestamp(),) * 2)
         done += 1
-        print(f"[{i}/{len(names)}] {name:<40} {label}")
+        print(f"[{i}/{len(paths)}] {name:<40} {label}", flush=True)
 
     print(f"\ntranscoded={done} failed={failed}; originals in {args.backup_dir}")
 

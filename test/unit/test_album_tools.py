@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
 
 import album_survey  # noqa: E402
 import filter_batches  # noqa: E402
+import import_survey  # noqa: E402
+import transcode_vp9  # noqa: E402
 import prune_imported  # noqa: E402
 import sharing_status  # noqa: E402
 import recover_dates  # noqa: E402
@@ -490,4 +492,84 @@ class TestTrialSelection:
         trial = filter_batches.trial_selection(kept, 20)
         years = {p.split("/")[2] for p in trial}
         assert years == {"2019", "2024"}
+
+
+class TestEquivalentExtensions:
+    def test_identical_is_equivalent(self):
+        assert import_survey.equivalent("jpg", "jpg")
+
+    def test_container_family_members_are_equivalent(self):
+        """A .MOV holding MP4-branded ISO-BMFF is normal, not a mislabel."""
+        assert import_survey.equivalent("mp4", "mov")
+        assert import_survey.equivalent("jpg", "jpeg")
+        assert import_survey.equivalent("heic", "heif")
+
+    def test_genuine_mislabel_is_caught(self):
+        """JPEG bytes under a .HEIC name — the real Google problem."""
+        assert not import_survey.equivalent("jpg", "heic")
+        assert not import_survey.equivalent("jpg", "png")
+
+    def test_across_families_is_not_equivalent(self):
+        assert not import_survey.equivalent("mp4", "jpg")
+
+
+class TestDateProblem:
+    def test_a_good_date_is_no_problem(self):
+        assert import_survey.date_problem(["2023:05:08 12:48:14"]) is None
+
+    def test_a_timezone_suffix_is_tolerated(self):
+        assert import_survey.date_problem(["2016:12:20 16:15:08+00:00"]) is None
+
+    def test_missing_dates_report_benign(self):
+        assert import_survey.date_problem(["-", "", "-"]) == "no date"
+
+    def test_out_of_range_year_is_flagged_as_unusable(self):
+        assert import_survey.date_problem(["2090:72:01 00:00:00"]).startswith("unusable")
+
+    def test_falls_back_to_a_later_usable_date(self):
+        """One bad tag must not condemn a file that has a good one."""
+        assert import_survey.date_problem(["0000:00:00 00:00:00",
+                                           "2019:04:01 10:00:00"]) is None
+
+    def test_zero_date_alone_is_unusable(self):
+        assert import_survey.date_problem(["0000:00:00 00:00:00"]).startswith("unusable")
+
+
+class TestBackupPath:
+    """Originals must not collide: 237 files shared 114 basenames in one export."""
+
+    def test_mirrors_the_tree_layout(self):
+        assert transcode_vp9.backup_path(
+            "/tree/Photos from 2024/IMG_1.MOV", "/tree", "/bk") == \
+            os.path.join("/bk", "Photos from 2024", "IMG_1.MOV")
+
+    def test_same_name_in_two_folders_gets_two_destinations(self):
+        a = transcode_vp9.backup_path("/tree/2024/IMG_5408.MOV", "/tree", "/bk")
+        b = transcode_vp9.backup_path("/tree/2025/IMG_5408.MOV", "/tree", "/bk")
+        assert a != b
+
+    def test_without_a_root_it_falls_back_to_the_basename(self):
+        assert transcode_vp9.backup_path("/tree/a/IMG_1.MOV", "", "/bk") == \
+            os.path.join("/bk", "IMG_1.MOV")
+
+
+class TestEncodeCmd:
+    def test_hdr_goes_to_ten_bit_hevc_with_the_apple_tag(self):
+        cmd = transcode_vp9.encode_cmd("in.mov", "out.mov", is_hdr=True)
+        assert "libx265" in cmd and "yuv420p10le" in cmd
+        assert cmd[cmd.index("-tag:v") + 1] == "hvc1"
+
+    def test_sdr_goes_to_eight_bit_h264(self):
+        cmd = transcode_vp9.encode_cmd("in.mov", "out.mov", is_hdr=False)
+        assert "libx264" in cmd and "yuv420p" in cmd
+
+    def test_crf_is_applied_to_the_hdr_path(self):
+        cmd = transcode_vp9.encode_cmd("in.mov", "out.mov", is_hdr=True, crf=26)
+        assert cmd[cmd.index("-crf") + 1] == "26"
+
+    def test_metadata_and_audio_are_carried_through(self):
+        """Re-encoding the audio would be lossy for no reason."""
+        cmd = transcode_vp9.encode_cmd("in.mov", "out.mov", is_hdr=True)
+        assert cmd[cmd.index("-c:a") + 1] == "copy"
+        assert "-map_metadata" in cmd
 
