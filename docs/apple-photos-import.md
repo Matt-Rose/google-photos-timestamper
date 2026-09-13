@@ -149,6 +149,42 @@ A library with a 49 GB WAL imported ~3.4k items successfully while one with a
 26.5 GB WAL failed. The WAL is a real problem for disk space and startup time;
 it was not the discriminator for import success.
 
+### Clearing a bloated WAL: what a checkpoint actually reports
+
+`PRAGMA wal_checkpoint(TRUNCATE)` both folds the log into the database and
+shrinks the file to zero. It returns `busy|total_pages|pages_moved`, and the
+busy flag is the part that matters. Measured against a real held lock:
+
+    one held read or write transaction   1|168|168   log stays 4,128,272 bytes
+    nothing holding the database         0|0|0       log becomes 0 bytes
+
+So a single active reader still lets the data move safely into the database,
+but blocks the *shrink*. That is precisely the state a live Photos library sits
+in permanently, and why the log grows without bound. A busy result is harmless
+— it changes nothing except leaving the file big — so **the log's file size is
+the real test of success, not the return code.**
+
+Set `busy_timeout` via `-cmd`, or the pragma echoes its own value into stdout
+and corrupts the result line:
+
+    sqlite3 -cmd "PRAGMA busy_timeout=10000" "$DB" "PRAGMA wal_checkpoint(TRUNCATE);"
+
+The connections to clear are not just Photos.app. `photolibraryd` is the
+process that actually owns the database — Photos talks to it over XPC — and
+these five per-user agents all attach:
+
+    com.apple.photolibraryd          com.apple.photoanalysisd
+    com.apple.mediaanalysisd         com.apple.cloudphotod
+    com.apple.mediastream.mstreamd
+
+`launchctl bootout gui/$UID/<label>` stops one; `launchctl bootstrap gui/$UID
+/System/Library/LaunchAgents/<label>.plist` puts it back, and logging out and
+in restores anything that refuses. Restore them *before* reopening Photos, or
+it reopens against a library whose owning daemon is gone.
+
+Killing Photos outright is safe for the database. The log exists exactly so an
+abrupt stop loses nothing; the next open replays it.
+
 ## osxphotos creates a NEW album, it does not add to an existing one
 
 `--album "Name"` creates a fresh album row every run, even when an album of
