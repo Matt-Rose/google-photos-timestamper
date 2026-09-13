@@ -14,6 +14,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
 
 import album_survey  # noqa: E402
+import filter_batches  # noqa: E402
 import prune_imported  # noqa: E402
 import sharing_status  # noqa: E402
 import recover_dates  # noqa: E402
@@ -424,4 +425,69 @@ class TestConfirmOrphans:
         assert prune_imported.confirm_orphans(
             {"s.MOV", "l.MOV", "u.MOV"}, "/root",
             duration=lambda p: durations[p]) == {"s.MOV"}
+
+
+class TestRelativeToTree:
+    def test_strips_the_root(self):
+        assert filter_batches.relative_to_tree("/a/b/Photos from 2019/x.jpg", "/a/b") == \
+            "Photos from 2019/x.jpg"
+
+    def test_tolerates_a_trailing_separator_on_the_root(self):
+        assert filter_batches.relative_to_tree("/a/b/x.jpg", "/a/b/") == "x.jpg"
+
+    def test_path_outside_the_tree_is_unmatched(self):
+        assert filter_batches.relative_to_tree("/other/x.jpg", "/a/b") is None
+
+    def test_a_similar_prefix_is_not_a_match(self):
+        """/a/bb must not be treated as living under /a/b."""
+        assert filter_batches.relative_to_tree("/a/bb/x.jpg", "/a/b") is None
+
+
+class TestFilterLines:
+    ROOT = "/tree"
+
+    def test_keeps_new_and_drops_everything_else(self):
+        decisions = {"a.jpg": "new", "b.jpg": "present",
+                     "c.jpg": "dup-in-set", "d.mov": "orphan-video"}
+        lines = [f"/tree/{n}\n" for n in ("a.jpg", "b.jpg", "c.jpg", "d.mov")]
+        kept, dropped, unknown = filter_batches.filter_lines(lines, decisions, self.ROOT)
+        assert kept == ["/tree/a.jpg"]
+        assert [d for _, d in dropped] == ["present", "dup-in-set", "orphan-video"]
+        assert unknown == []
+
+    def test_unledgered_line_is_kept_and_reported(self):
+        """Dropping a file the prune never examined would be guessing."""
+        kept, dropped, unknown = filter_batches.filter_lines(
+            ["/tree/x.MP\n"], {}, self.ROOT)
+        assert kept == ["/tree/x.MP"]
+        assert unknown == ["/tree/x.MP"]
+        assert dropped == []
+
+    def test_blank_lines_are_ignored(self):
+        kept, _, _ = filter_batches.filter_lines(["\n", "  \n"], {}, self.ROOT)
+        assert kept == []
+
+
+class TestTrialSelection:
+    def test_returns_everything_when_the_set_is_small(self):
+        kept = ["/t/a.jpg", "/t/b.jpg"]
+        assert filter_batches.trial_selection(kept, 500) == kept
+
+    def test_never_splits_a_live_photo_pair(self):
+        kept = [f"/t/IMG_{i}.HEIC" for i in range(50)] + \
+               [f"/t/IMG_{i}.MOV" for i in range(50)]
+        trial = filter_batches.trial_selection(kept, 10)
+        stems = {filter_batches.group_stem(p) for p in trial}
+        for stem in stems:
+            assert f"{stem}.HEIC" in trial and f"{stem}.MOV" in trial
+
+    def test_respects_the_requested_size(self):
+        kept = [f"/t/f{i}.jpg" for i in range(1000)]
+        assert len(filter_batches.trial_selection(kept, 100)) <= 100
+
+    def test_spreads_across_the_set_rather_than_taking_a_prefix(self):
+        kept = [f"/t/{y}/f{i}.jpg" for y in (2019, 2024) for i in range(100)]
+        trial = filter_batches.trial_selection(kept, 20)
+        years = {p.split("/")[2] for p in trial}
+        assert years == {"2019", "2024"}
 
