@@ -277,7 +277,13 @@ def main() -> None:
     todo = still_to_decide(files, decisions)
     print(f"\n{len(files)} media files, {len(todo)} still to decide", file=sys.stderr)
 
+    # Progress is paced off a sliding window, not the average since launch.
+    # Files vary hugely in size and the walk is alphabetical, so a cumulative
+    # rate is dominated by whatever the first folders happened to hold and
+    # stays wrong for hours. Measured on one run: 10 files/s cumulative while
+    # the true current rate was 18.
     started, done = time.time(), 0
+    window: collections.deque = collections.deque(maxlen=10)
     with open(ledger_path, "a", encoding="utf-8") as ledger:
         for rel in todo:
             if args.limit and done >= args.limit:
@@ -289,10 +295,16 @@ def main() -> None:
             ledger.flush()
             done += 1
             if done % 500 == 0:
-                rate = done / (time.time() - started)
+                now = time.time()
+                window.append((done, now))
+                if len(window) > 1:
+                    d0, t0 = window[0]
+                    rate = (done - d0) / (now - t0) if now > t0 else 0
+                else:
+                    rate = done / (now - started) if now > started else 0
                 left = (len(todo) - done) / rate if rate else 0
                 print(f"  {done}/{len(todo)}  {rate:.0f}/s  ~{left/60:.0f} min left",
-                      file=sys.stderr)
+                      file=sys.stderr, flush=True)
 
         # The last two passes need the whole picture, so they run once at the
         # end, and in this order: a still dropped as an in-set duplicate also
