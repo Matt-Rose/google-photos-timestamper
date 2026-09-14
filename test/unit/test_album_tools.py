@@ -573,3 +573,35 @@ class TestEncodeCmd:
         assert cmd[cmd.index("-c:a") + 1] == "copy"
         assert "-map_metadata" in cmd
 
+
+class TestAutoliveUnsafe:
+    """Files that make osxphotos --auto-live abort the whole run."""
+
+    def test_png_paired_with_a_video_is_unsafe(self):
+        paths = ["a/IMG_1.PNG", "a/IMG_1.MOV"]
+        assert filter_batches.autolive_unsafe(paths) == {"a/IMG_1.PNG"}
+
+    def test_jpeg_paired_with_a_video_is_fine(self):
+        paths = ["a/IMG_1.JPG", "a/IMG_1.MOV"]
+        assert filter_batches.autolive_unsafe(paths) == set()
+
+    def test_heic_paired_with_mp4_is_fine(self):
+        paths = ["a/IMG_1.HEIC", "a/IMG_1.mp4"]
+        assert filter_batches.autolive_unsafe(paths) == set()
+
+    def test_a_video_outside_the_whitelist_is_unsafe(self):
+        """makelive accepts only .mov/.mp4; an .m4v pair throws the same way."""
+        paths = ["a/IMG_1.JPG", "a/IMG_1.m4v"]
+        assert filter_batches.autolive_unsafe(paths) == {"a/IMG_1.m4v"}
+
+    def test_lone_png_with_no_video_is_fine(self):
+        """Nothing to pair with means makelive is never called."""
+        assert filter_batches.autolive_unsafe(["a/IMG_1.PNG"]) == set()
+
+    def test_png_and_video_in_different_folders_do_not_pair(self):
+        paths = ["a/IMG_1.PNG", "b/IMG_1.MOV"]
+        assert filter_batches.autolive_unsafe(paths) == set()
+
+    def test_case_is_ignored(self):
+        assert filter_batches.autolive_unsafe(["a/x.PnG", "a/x.MoV"]) == {"a/x.PnG"}
+

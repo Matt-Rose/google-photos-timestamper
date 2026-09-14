@@ -473,6 +473,42 @@ recorded path is wrong. Nothing goes bang until something downstream tries to
 open it, and then it fails as "No such file or directory" for a file you can
 plainly see on disk.
 
+## `--auto-live` aborts the whole run on a `.png` that shares a stem
+
+osxphotos decides a still and a video are a Live Photo pair by **filename
+stem**, then hands the pair to `makelive` to confirm. The two disagree about
+what counts as an image:
+
+    osxphotos/image_file_utils.py   is_image_file()  -- content-sniffing, broad
+    makelive/makelive.py:248        is_image_file()  -- suffix in
+                                                        {.jpg .jpeg .heic .heif}
+
+So osxphotos passes makelive a file it then refuses, raising an **uncaught**
+`ValueError: Image file is not a JPEG or HEIC image`. This happens during
+grouping, before anything is imported, so the entire run dies and the library
+is untouched — noisy, but at least not a partial import.
+
+`makelive.is_video_file` is equally narrow (`.mov`/`.mp4` only), so an `.m4v`
+or `.avi` in a pair throws the same way one line later.
+
+**Do not fix this by renaming.** In one real set, 3,195 stills were at risk —
+and only 883 were mislabelled (JPEG bytes under a `.PNG` name). The other
+2,312 were genuinely PNG, so renaming them to `.jpg` would have created
+exactly the mislabelling this whole class of bug comes from.
+
+**None of them was a real Live Photo.** Apple stores a `ContentIdentifier` in
+both halves of a genuine pair and Google preserves it (94% intact); not one of
+these carried it. They are filename-stem collisions — a screenshot
+`IMG_4713.PNG` next to an unrelated `IMG_4713.MOV` — the same wrapping camera
+counter that produces false orphan-video matches.
+
+So the fix costs nothing: hold those files back and import them in a second
+pass **without** `--auto-live`. `filter_batches.py --split-autolive` writes
+them to `00-no-autolive.txt`. Judge safety **after** filtering, not before: a
+`.png` whose video partner was dropped as an orphan is no longer half of a
+pair, and holding it back would be pointless — doing it in the wrong order
+held back 3,431 files where only 3,195 were at risk.
+
 ## Bulk import: measure the duplicate rate before deciding to prune
 
 The album work above imports a few thousand curated files. The bulk phase is a
