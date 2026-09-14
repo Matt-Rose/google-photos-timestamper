@@ -509,6 +509,37 @@ them to `00-no-autolive.txt`. Judge safety **after** filtering, not before: a
 pair, and holding it back would be pointless — doing it in the wrong order
 held back 3,431 files where only 3,195 were at risk.
 
+## Pending-upload count is not a health signal on its own
+
+A drain-waiting import harness naturally watches `ZASSET.ZCLOUDLOCALSTATE`
+(`0` = waiting to upload, `1` = uploaded). It is the right metric, but it is
+easy to misread, because **anything else happening to the library lands in the
+same counter**.
+
+Measured mid-migration: 8,054 assets pending, of which
+
+    shared-album copy   8053
+    ordinary asset         1
+
+An iCloud Shared Album uploads its own downscaled copy of every item it holds,
+so creating a batch of shared albums queues thousands of uploads that have
+nothing to do with any import. 1,823 of them had been pending over a week.
+
+Two consequences:
+
+* **Wait on a baseline, not an absolute.** Sample pending immediately before
+  each batch and wait for it to return to `baseline + floor`. A standing
+  backlog is then absorbed rather than mistaken for the batch's own work, and
+  the wait ends when *this* batch has drained.
+* **Check the drained condition before the stall condition.** Otherwise a
+  library that is simply busy with unrelated uploads looks stalled.
+
+The genuinely alarming signal is different and worth watching for separately:
+the *uploaded* count falling. On 2026-08-21 a library un-uploaded ~17,000
+assets over five hours while the mingle-reset counter read zero, so resets
+alone are not sufficient. Small dips of a few tens are ordinary state churn;
+set the tolerance well above that (200 worked) and stop hard if it is crossed.
+
 ## Bulk import: measure the duplicate rate before deciding to prune
 
 The album work above imports a few thousand curated files. The bulk phase is a
