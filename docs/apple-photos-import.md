@@ -451,6 +451,28 @@ is a far more reliable check than set differences on names.
 Note also that `ZCACHEDCOUNT` on `ZGENERICALBUM` lags. Count the join table
 (`Z_<n>ASSETS`) for a true membership figure.
 
+## `exiftool -T` silently mangles paths with trailing spaces
+
+Reading exiftool's tabular output and rebuilding each path from `-Directory`
+and `-FileName` looks obviously correct and is not. **`-T` strips trailing
+whitespace from every value**, so a folder named `Kefalonia ` comes back as
+`Kefalonia` and the reconstructed path does not exist. Google's exports are
+full of such folders — 13 of them holding 1,113 files in one real set, from
+album names that were typed with a stray space years ago.
+
+`-T` also cannot emit `SourceFile` at all; asking for it returns `-`. So there
+is no way to recover the true path once you are in tabular mode. Use JSON:
+
+    exiftool -@ argfile -j -SourceFile -FileType ...
+
+which returns `SourceFile` byte-for-byte as supplied.
+
+The failure is quiet in the worst way. exiftool reads the right file and
+reports its metadata correctly, so the survey's *findings* are sound; only the
+recorded path is wrong. Nothing goes bang until something downstream tries to
+open it, and then it fails as "No such file or directory" for a file you can
+plainly see on disk.
+
 ## Bulk import: measure the duplicate rate before deciding to prune
 
 The album work above imports a few thousand curated files. The bulk phase is a

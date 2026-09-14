@@ -20,6 +20,7 @@ interrupted run costs only the chunk it was in.
 
 import argparse
 import collections
+import json
 import os
 import subprocess
 import sys
@@ -27,7 +28,13 @@ import tempfile
 
 MIN_YEAR, MAX_YEAR = 1900, 2100
 
-TAGS = ["-Directory", "-FileName", "-FileType", "-FileTypeExtension",
+# Output is read as JSON, not exiftool's -T tabular mode. -T strips trailing
+# whitespace from every value, so a directory named "Kefalonia " comes back as
+# "Kefalonia" and the reconstructed path does not exist. Google's export
+# contains plenty of such folders -- 13 of them, holding 1,113 files, in one
+# real set. -T also cannot emit SourceFile at all (it returns "-"), so there is
+# no way to recover the true path from it. JSON gives SourceFile back verbatim.
+TAGS = ["-SourceFile", "-FileType", "-FileTypeExtension",
         "-DateTimeOriginal", "-CreateDate", "-MediaCreateDate", "-CompressorID"]
 
 # Extensions that legitimately disagree with the detected type. These are
@@ -90,8 +97,8 @@ def read_lists(paths: list[str]) -> list[str]:
     return files
 
 
-def run_exiftool(chunk: list[str]) -> list[list[str]]:
-    """One exiftool invocation over a chunk; returns parsed tab-separated rows.
+def run_exiftool(chunk: list[str]) -> list[dict]:
+    """One exiftool invocation over a chunk, returned as dicts.
 
     Files are passed via an argfile because a chunk of several thousand paths
     will not fit in a command line, and because it handles spaces and quotes
@@ -103,9 +110,16 @@ def run_exiftool(chunk: list[str]) -> list[list[str]]:
         argfile = handle.name
     try:
         proc = subprocess.run(
-            ["exiftool", "-@", argfile, "-T", *TAGS],
+            ["exiftool", "-@", argfile, "-j", *TAGS],
             capture_output=True, text=True, errors="replace")
-        return [line.split("\t") for line in proc.stdout.splitlines() if line.strip()]
+        if not proc.stdout.strip():
+            return []
+        try:
+            return json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            print(f"  WARNING: unparseable exiftool output for a chunk of "
+                  f"{len(chunk)}", file=sys.stderr, flush=True)
+            return []
     finally:
         os.unlink(argfile)
 
@@ -135,14 +149,18 @@ def main() -> None:
         for start in range(0, len(todo), args.chunk):
             chunk = todo[start:start + args.chunk]
             for row in run_exiftool(chunk):
-                if len(row) < len(TAGS):
-                    row += ["-"] * (len(TAGS) - len(row))
-                directory, name, ftype, fext = row[0], row[1], row[2], row[3]
-                path = os.path.join(directory, name)
-                claimed = os.path.splitext(name)[1].lstrip(".").lower()
+                path = row.get("SourceFile", "")
+                if not path:
+                    continue
+                ftype = str(row.get("FileType", "-"))
+                fext = str(row.get("FileTypeExtension", "-"))
+                codec = str(row.get("CompressorID", "-"))
+                claimed = os.path.splitext(path)[1].lstrip(".").lower()
                 mismatch = "" if equivalent(fext.lower(), claimed) else f"{claimed}->{fext}"
-                problem = date_problem(row[4:7]) or ""
-                out.write(f"{path}\t{ftype}\t{mismatch}\t{problem}\t{row[7]}\n")
+                dates = [str(row.get(t, "")) for t in
+                         ("DateTimeOriginal", "CreateDate", "MediaCreateDate")]
+                problem = date_problem(dates) or ""
+                out.write(f"{path}\t{ftype}\t{mismatch}\t{problem}\t{codec}\n")
             out.flush()
             print(f"  {min(start + args.chunk, len(todo))}/{len(todo)}",
                   file=sys.stderr, flush=True)
