@@ -540,6 +540,65 @@ assets over five hours while the mingle-reset counter read zero, so resets
 alone are not sufficient. Small dips of a few tens are ordinary state churn;
 set the tolerance well above that (200 worked) and stop hard if it is crossed.
 
+## One refused file can cost you the whole batch
+
+Photos raises a modal alert for each file it refuses — *"This item cannot be
+added to your Photo library because it may be in an unrecognisable file format
+or the file may not contain valid data."* **A modal sheet blocks every
+subsequent AppleScript import.** So one unimportable video part-way through a
+batch silently fails everything behind it.
+
+Measured on 2026-09-15, three batches in a row:
+
+    2013-part01   838 imported,    0 errors   (2013 has almost no video)
+    2014-part01  1140 imported,  622 errors   cascade from file ~1140
+    2015-part01     0 imported, 1822 errors   started against a blocked Photos
+
+That is 2,444 files lost from two batches, and it needed three independent
+mistakes to happen at once. Each is worth guarding separately.
+
+### osxphotos exits 0 even when every file failed
+
+`Done: imported 0 file groups, 1822 errors` returned **rc=0**. A harness that
+trusts the exit code records the batch as complete having imported nothing,
+then moves on — and would happily do that to every remaining batch overnight.
+
+**Do not test "imported 0".** With `--resume`, a re-run legitimately imports
+nothing because everything is already in, and a few files are refused every
+time. The signature of a cascade is that **nothing succeeds after the first
+error** — one alert blocks everything behind it, so errors run unbroken to the
+end. If any file imported *or was skipped* after the last error, Photos was
+still answering:
+
+    last_err=$(grep -n "Error importing" "$log" | tail -1 | cut -d: -f1)
+    last_ok=$(grep -nE "Imported |Skipping " "$log" | tail -1 | cut -d: -f1)
+    [ "${last_err:-0}" -gt "${last_ok:-0}" ] && echo CASCADE
+
+### A dialog-dismissing watchdog is mandatory, and must prove it can see
+
+Driving Photos unattended requires something clicking those alerts away. Ours
+polls every 10 seconds, logs each alert's full text, and clicks only `OK` or a
+lone button — never a real choice.
+
+It had been **blind for 18 days** and said nothing, because of this:
+
+    found=$(osascript -e "$READ_ALERTS" 2>/dev/null)
+
+Accessibility is a TCC grant and can lapse while a process runs. When it does,
+osascript errors, `2>/dev/null` turns that into an empty string, and an empty
+string is indistinguishable from "no alerts". It checked permission once, at
+startup. **Check every cycle and fail loudly** — a check that can fail silently
+is worse than no check, because it manufactures confidence.
+
+### Photos keeps its own queue of refusals
+
+Alerts kept arriving for ten minutes after an import finished, and survived a
+force-quit of Photos. Dismissal is limited to one per poll, so clearing a
+backlog takes `queue x interval` — drop the interval to 2s for a burst.
+
+Wait for the dialog log to go quiet before starting the next batch. Beginning
+one while alerts are still queued means the first of them cascades it.
+
 ## Bulk import: measure the duplicate rate before deciding to prune
 
 The album work above imports a few thousand curated files. The bulk phase is a
