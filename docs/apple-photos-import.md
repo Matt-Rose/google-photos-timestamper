@@ -599,6 +599,41 @@ backlog takes `queue x interval` — drop the interval to 2s for a burst.
 Wait for the dialog log to go quiet before starting the next batch. Beginning
 one while alerts are still queued means the first of them cascades it.
 
+## Photos stops answering after ~1,000 imports in one invocation
+
+Not a bad file, not a modal alert, not a hang you can see. Somewhere past a
+thousand imports in a **single** `osxphotos import` run, Photos silently stops
+accepting and every subsequent file fails with a bare "Error importing".
+Measured: 838 fine, 622 fine, broke after 1,140, broke after 1,434. The limit
+is not fixed.
+
+A fresh invocation recovers completely without restarting Photos. So:
+
+* **Cap each invocation** — 750 files leaves margin under the lowest observed
+  break. `split -l` the list and loop, rather than one giant `xargs`.
+* **Probe Photos between chunks** with the cheap `count of albums`, twice, 20
+  seconds apart, and only restart if it genuinely will not answer — killing a
+  healthy Photos on every chunk churns the WAL for nothing.
+
+It reproduces at the same file every retry, because `--resume` skips everything
+already imported and starts on whatever broke it last time. That looks exactly
+like "this file is corrupt" and is not. Check whether successes and failures
+*interleave* in the attempt that made progress: a cascade is N successes, then
+nothing but failures to the end.
+
+## A major OS update resets TCC grants
+
+macOS 26 → 27 silently revoked Terminal's Automation, Full Disk Access **and**
+Accessibility in both accounts. The symptoms are all indirect: AppleScript to
+*any* app returns `-1712`, `ls /Volumes/External` returns `EPERM`, and the
+dialog watchdog loops forever seeing "no alerts". Test AppleScript against
+Finder before blaming Photos — if Finder times out too, it is TCC.
+
+The Photos library also migrates on first open after the update. The tell that
+it has finished is the WAL collapsing (843 MB → 4 MB here); a post-migration
+re-analysis then runs for hours at 200%+ CPU, ~300 assets/min. Do not import
+into a library until both are done, and expect the first open to look frozen.
+
 ## Bulk import: measure the duplicate rate before deciding to prune
 
 The album work above imports a few thousand curated files. The bulk phase is a
