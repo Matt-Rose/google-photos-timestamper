@@ -163,8 +163,17 @@ def awaiting_acceptance(participants: list[tuple[str, int | None]]) -> list[str]
     return [text for text, status in participants if status != 2]
 
 
-def classify(private_total, in_shared_library, shared_pk, missing_names):
-    if private_total and in_shared_library < private_total:
+def classify(private_total, in_shared_library, shared_pk, missing_names,
+             require_shared_library=True):
+    """Which of the four states an album is in.
+
+    ``require_shared_library=False`` skips the first test. That is the right
+    setting for a library whose owner never used the Shared Library at all,
+    where the only question is whether each private album has a complete
+    shared-album twin -- otherwise every album reports as "still has items
+    outside the Shared Library" and the comparison you want never runs.
+    """
+    if require_shared_library and private_total and in_shared_library < private_total:
         return HAS_PRIVATE
     if shared_pk is None:
         return NO_SHARED_ALBUM
@@ -178,6 +187,9 @@ def main() -> None:
     parser.add_argument("library")
     parser.add_argument("--albums", help="TSV with a 'name' column; default is every album")
     parser.add_argument("--verbose", action="store_true", help="list the missing filenames")
+    parser.add_argument("--no-shared-library", action="store_true",
+                        help="skip the Shared Library check; compare private albums "
+                             "against their shared-album twins only")
     args = parser.parse_args()
 
     con = connect(args.library)
@@ -226,7 +238,8 @@ def main() -> None:
             )
 
         people = invitees.get(share_pk, []) if share_pk is not None else []
-        state = classify(total, in_lib, share_pk, missing)
+        state = classify(total, in_lib, share_pk, missing,
+                         require_shared_library=not args.no_shared_library)
         detail = f"{in_lib}/{total} in Shared Library"
         if state in (SHARED_INCOMPLETE, DELETABLE):
             detail = f"{total} items, shared album short by {len(missing)}"

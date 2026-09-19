@@ -16,7 +16,9 @@ gotchas" below before assuming similar-looking code elsewhere is still broken.
 (album import) are done: 37 Google shared albums downloaded, prepared and
 imported. What remains is manual GUI work — moving albums into the Shared
 Library and creating iCloud Shared Albums, neither of which is scriptable —
-tracked with `tools/sharing_status.py`. Phase three is the bulk import of a
+tracked with `tools/sharing_status.py` (use `--no-shared-library` for a
+library whose owner never used the Shared Library, or every album reports as
+not-yet-shared and the private-vs-shared comparison never runs). Phase three is the bulk import of a
 second, much larger Takeout with no album structure; `tools/prune_imported.py`
 is the front half of that and has not yet been run at scale.
 
@@ -136,6 +138,10 @@ supporting code in `tools/`:
   asset identity with the private album. Its counts are only meaningful once
   uploads have settled — a shared album's membership wobbles for hours after
   it is created, and a *moving* shortfall means sync, not failure.
+- **`tools/date_sanity.py`** — read-only scan for capture dates outside a
+  plausible range. Photos sorts these to the very start or end of the library
+  where nobody scrolls, so they persist for years; the tool prints the UUID so
+  each can be found and corrected by hand.
 - **`tools/prune_imported.py`** — for the bulk phase: decides which files in
   an import tree are already in the library, writing a resumable ledger, and
   optionally moves them aside so only genuinely new files are handed to

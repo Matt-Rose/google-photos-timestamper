@@ -605,3 +605,17 @@ class TestAutoliveUnsafe:
     def test_case_is_ignored(self):
         assert filter_batches.autolive_unsafe(["a/x.PnG", "a/x.MoV"]) == {"a/x.PnG"}
 
+
+class TestClassifyWithoutSharedLibrary:
+    def test_shared_library_check_can_be_skipped(self):
+        """A library that never used the Shared Library: 0 in it must not mask the comparison."""
+        assert sharing_status.classify(10, 0, 7, [], require_shared_library=False) == \
+            sharing_status.DELETABLE
+        assert sharing_status.classify(10, 0, 7, ["a.jpg"], require_shared_library=False) == \
+            sharing_status.SHARED_INCOMPLETE
+        assert sharing_status.classify(10, 0, None, [], require_shared_library=False) == \
+            sharing_status.NO_SHARED_ALBUM
+
+    def test_default_still_requires_shared_library(self):
+        assert sharing_status.classify(10, 0, 7, []) == sharing_status.HAS_PRIVATE
+
