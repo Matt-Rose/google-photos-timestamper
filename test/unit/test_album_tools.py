@@ -619,3 +619,93 @@ class TestClassifyWithoutSharedLibrary:
     def test_default_still_requires_shared_library(self):
         assert sharing_status.classify(10, 0, 7, []) == sharing_status.HAS_PRIVATE
 
+
+class TestNormTitle:
+    def test_trailing_space_is_ignored(self):
+        assert sharing_status.norm_title("Holiday ") == sharing_status.norm_title("Holiday")
+
+    def test_internal_whitespace_collapses(self):
+        assert sharing_status.norm_title("Family  album") == sharing_status.norm_title("Family album")
+
+    def test_case_is_ignored(self):
+        assert sharing_status.norm_title("Family album") == sharing_status.norm_title("Family Album")
+
+    def test_punctuation_still_distinguishes(self):
+        """'Party!' and 'Party' may be different albums; do not merge them."""
+        assert sharing_status.norm_title("Party!") != sharing_status.norm_title("Party")
+
+    def test_a_year_suffix_is_a_different_album(self):
+        assert sharing_status.norm_title("Holiday 2024") != sharing_status.norm_title("Holiday")
+
+
+
+class TestMatchAssets:
+    """Pairing a private album's items with a shared album's copies.
+
+    The two sides come from different export routes, so neither filenames nor
+    capture times agree exactly; the matcher has to cope with each measured
+    discrepancy without letting distinct photos pass as one.
+    """
+
+    def missing(self, private, shared):
+        return [n for n, _ in sharing_status.match_assets(private, shared)]
+
+    def test_same_second_matches_regardless_of_name(self):
+        assert self.missing([("IMG_1(1).JPG", 1000.0)], [("IMG_1.JPG", 1000.0)]) == []
+
+    def test_one_second_rounding_difference_matches(self):
+        """Measured: 593 of 1,382 items were exactly one second apart."""
+        assert self.missing([("a.jpg", 1000.7)], [("b.jpg", 999.9)]) == []
+
+    def test_two_seconds_apart_is_a_different_photo(self):
+        assert self.missing([("a.jpg", 1000.0)], [("b.jpg", 1003.0)]) == ["a.jpg"]
+
+    def test_whole_hour_shift_matches(self):
+        """Measured: 17 items off by exactly 3600 or 3601 seconds."""
+        assert self.missing([("a.jpg", 1000.0)], [("b.jpg", 4601.0)]) == []
+
+    def test_partial_hour_shift_does_not_match(self):
+        assert self.missing([("a.jpg", 1000.0)], [("b.jpg", 1000.0 + 2698)]) == ["a.jpg"]
+
+    def test_matching_is_one_to_one(self):
+        """A burst of three frames in one second needs three shared copies."""
+        burst = [("a.jpg", 1000.1), ("b.jpg", 1000.4), ("c.jpg", 1000.9)]
+        assert self.missing(burst, [("x.jpg", 1000.0), ("y.jpg", 1000.0)]) == ["c.jpg"]
+
+    def test_exact_match_is_preferred_over_hour_shift(self):
+        """The hour-shift pass only runs on what the exact pass left over."""
+        private = [("a.jpg", 1000.0), ("b.jpg", 4600.0)]
+        shared = [("x.jpg", 4600.0)]
+        assert self.missing(private, shared) == ["a.jpg"]
+
+    def test_undated_item_matches_by_name(self):
+        assert self.missing([("scan.jpg", None)], [("scan.jpg", None)]) == []
+
+    def test_undated_item_with_no_name_match_is_missing(self):
+        assert self.missing([("scan.jpg", None)], [("other.jpg", 1000.0)]) == ["scan.jpg"]
+
+    def test_name_match_cannot_reuse_a_time_matched_copy(self):
+        private = [("a.jpg", 1000.0), ("a.jpg", None)]
+        assert self.missing(private, [("a.jpg", 1000.0)]) == ["a.jpg"]
+
+    def test_edited_copy_of_a_matched_original_is_not_missing(self):
+        """Takeout gives an edited photo two files; the shared album has one."""
+        private = [("IMG_1.jpg", 1000.0), ("IMG_1-edited.jpg", 1000.0)]
+        assert self.missing(private, [("IMG_1.jpg", 1000.0)]) == []
+
+    def test_edited_copy_whose_original_is_also_missing_is_missing(self):
+        private = [("IMG_1.jpg", 1000.0), ("IMG_1-edited.jpg", 1000.0)]
+        assert self.missing(private, []) == ["IMG_1.jpg", "IMG_1-edited.jpg"]
+
+    def test_edit_original_name(self):
+        assert sharing_status.edit_original("IMG_1-edited.jpg") == "IMG_1.jpg"
+        assert sharing_status.edit_original("IMG_1.jpg") is None
+        assert sharing_status.edit_original("edited.jpg") is None
+
+
+class TestAppleDate:
+    def test_epoch_is_2001(self):
+        assert sharing_status.apple_date(0) == "2001-01-01 00:00:00"
+
+    def test_undated(self):
+        assert sharing_status.apple_date(None) == "undated"

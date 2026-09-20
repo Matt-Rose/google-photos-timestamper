@@ -329,6 +329,40 @@ Two things make this slower than it looks: items whose originals are not
 downloaded locally must be fetched from iCloud before they can be uploaded
 again, and the whole thing competes with `mediaanalysisd` for the same disk.
 
+## Comparing a private album with its shared twin: match on capture time
+
+`sharing_status.py` decides whether a shared album is complete by pairing
+each private-album item with a copy in the shared album. Filenames were the
+first join, and they are close to useless when the two albums came from
+different export routes: the private album from Takeout, the shared album
+from a web download. On one 1,382-item album, filenames paired 106.
+
+Capture time (`ZASSET.ZDATECREATED`) is the real identity, but exact
+comparison paired only 645. Measuring the delta from each private item to its
+*nearest* shared item showed why:
+
+    delta      items
+        0 s      738   exact
+       -1 s      593   sub-second rounding differs between export routes
+    +3600 s       17   one whole hour, a zone or DST reading
+    other         34   genuinely absent
+
+So the matcher pairs one-to-one (a burst of three frames in one second needs
+three shared copies) by capture time within ±1 s, then by whole-hour shifts
+for what is left, then by filename for the undated remainder. That took the
+album to 48 missing.
+
+The last artefact was Google's edits. Takeout writes an edited photo as two
+files, `IMG_1.jpg` and `IMG_1-edited.jpg`, with the same capture time; a
+shared album built from the web download holds one copy. An unmatched
+edited copy whose original matched is not a gap. With that, 28 remained —
+scattered single items, mostly videos — and a 146-item album whose filename
+join had reported 36 missing reported none, which is what its 147-item twin
+had said all along.
+
+Do not build gap albums from a filename comparison. Half of what it lists is
+already shared.
+
 ## `sharing_status.py` reports by title, and ignores folders
 
 Albums nested in a Photos *folder* are not visible in the root album list in

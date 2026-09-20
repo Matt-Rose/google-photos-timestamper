@@ -21,7 +21,15 @@ Three traps this works around, each of which produced a wrong answer first:
 * **A shared album shares no assets with the private album.** It holds its own
   downscaled copies, so ``ZASSET.ZCOLLECTIONSHARE`` never points at the
   private album's assets and an asset-identity join returns zero overlap for
-  a *complete* shared album. Filenames are the only usable join.
+  a *complete* shared album. Only the metadata survives the copy.
+* **Filenames do not survive either, reliably.** A shared album populated
+  from a Google web download carries Google's names ("IMG_1234.JPG"), a
+  private album built from Takeout carries Takeout's ("IMG_1234(1).JPG",
+  "image.jpg"); in one 1,400-item pair only 106 names agreed. Capture time
+  is the robust identity -- but even that disagrees by up to a second
+  (sub-second rounding differs between the two export routes) and, for a
+  handful, by exactly one hour. ``match_assets`` pairs items one-to-one by
+  capture time with those tolerances, then by filename for what is left.
 * **`ZFILENAME` is Photos' internal name**, not the original. Comparing it
   against anything gives 0% overlap. Use
   ``ZADDITIONALASSETATTRIBUTES.ZORIGINALFILENAME``.
@@ -34,6 +42,7 @@ Three traps this works around, each of which produced a wrong answer first:
 import argparse
 import collections
 import csv
+import datetime
 import os
 import re
 import sqlite3
@@ -51,6 +60,16 @@ def connect(library: str) -> sqlite3.Connection:
     if not os.path.exists(db):
         sys.exit(f"no Photos.sqlite under {library}")
     return sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+
+
+APPLE_EPOCH = 978307200  # 2001-01-01T00:00:00Z, the zero of ZDATECREATED
+
+
+def apple_date(when: float | None) -> str:
+    if when is None:
+        return "undated"
+    return datetime.datetime.fromtimestamp(
+        when + APPLE_EPOCH, datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 ALBUM_COL = re.compile(r"^Z_\d+ALBUMS$")
@@ -84,20 +103,33 @@ def album_asset_table(con: sqlite3.Connection) -> tuple[str, str, str]:
     return best[1], best[2], best[3]
 
 
+def norm_title(title: str) -> str:
+    """Key used to pair a private album with its shared twin.
+
+    Album titles arrive with stray whitespace and inconsistent case -- Google
+    exported folders like "Holiday " and "Family album ", and the
+    album import carried those names into Photos verbatim, while the shared
+    albums built by hand are clean. Exact comparison missed seven of seventeen
+    real pairs in one library. Whitespace and case are normalised; punctuation
+    is not, because "Party!" and "Party" may genuinely differ.
+    """
+    return " ".join(title.split()).casefold()
+
+
 def live_albums(con: sqlite3.Connection) -> dict[str, int]:
-    """Newest non-trashed album row per title."""
+    """Newest non-trashed album row per (normalised) title."""
     out: dict[str, int] = {}
     for pk, title in con.execute(
         "select Z_PK, ZTITLE from ZGENERICALBUM where ZKIND=2 and ZTITLE is not null "
         "and (ZTRASHEDSTATE is null or ZTRASHEDSTATE=0) order by Z_PK"
     ):
-        out[title] = pk          # later rows win: newest per title
+        out[norm_title(title)] = pk          # later rows win: newest per title
     return out
 
 
 def shared_albums(con: sqlite3.Connection) -> dict[str, int]:
     return {
-        title: pk
+        norm_title(title): pk
         for pk, title in con.execute(
             "select Z_PK, ZTITLE from ZSHARE where ZSCOPETYPE=0 and ZTITLE is not null"
         )
@@ -163,6 +195,75 @@ def awaiting_acceptance(participants: list[tuple[str, int | None]]) -> list[str]
     return [text for text, status in participants if status != 2]
 
 
+# A private item and a shared item are the same photo if their capture times
+# agree to within this many seconds ...
+TIME_TOLERANCE = 1
+# ... or differ by a whole number of hours (an export route that read the
+# zone differently), up to the widest offset in use.
+HOUR_SHIFTS = [h * 3600 for h in range(-14, 15) if h]
+
+
+def match_assets(private: list[tuple[str, float | None]],
+                 shared: list[tuple[str, float | None]]) -> list[tuple[str, float | None]]:
+    """Items of ``private`` that have no counterpart in ``shared``.
+
+    Each item is ``(original filename, capture time in seconds)``. Matching is
+    one-to-one -- a shared item can stand in for at most one private item, so
+    a burst of three identical-second frames needs three shared copies -- and
+    runs in three passes, strongest evidence first: capture time within
+    ``TIME_TOLERANCE``, capture time shifted by a whole number of hours, then
+    filename alone (the only evidence for items with no date).
+
+    Takeout exports a photo edited in Google as two files, "IMG_1.jpg" and
+    "IMG_1-edited.jpg", with the same capture time; a shared album holds one
+    copy of that photo. So an unmatched edited copy whose original matched is
+    not missing -- the photo is there. It is dropped from the result.
+    """
+    by_second: dict[int, list[int]] = collections.defaultdict(list)
+    by_name: dict[str, list[int]] = collections.defaultdict(list)
+    for i, (name, when) in enumerate(shared):
+        if when is not None:
+            by_second[int(when)].append(i)
+        if name:
+            by_name[name].append(i)
+    used: set[int] = set()
+
+    def take(candidates: list[int]) -> bool:
+        for i in candidates:
+            if i not in used:
+                used.add(i)
+                return True
+        return False
+
+    def near(when: float, shift: int) -> list[int]:
+        centre = int(when) + shift
+        return [i for s in range(centre - TIME_TOLERANCE, centre + TIME_TOLERANCE + 1)
+                for i in by_second.get(s, ())]
+
+    unmatched = list(range(len(private)))
+    for shifts in ([0], HOUR_SHIFTS):
+        still: list[int] = []
+        for p in unmatched:
+            when = private[p][1]
+            if when is None or not any(take(near(when, s)) for s in shifts):
+                still.append(p)
+        unmatched = still
+    unmatched = [p for p in unmatched if not take(by_name.get(private[p][0], []))]
+    matched_names = {private[p][0] for p in range(len(private))} - {
+        private[p][0] for p in unmatched}
+    return [private[p] for p in unmatched
+            if edit_original(private[p][0]) not in matched_names]
+
+
+EDITED = re.compile(r"^(.*)-edited(\.[^.]+)$")
+
+
+def edit_original(name: str) -> str | None:
+    """"IMG_1-edited.jpg" -> "IMG_1.jpg"; None if this is not an edited copy."""
+    m = EDITED.match(name)
+    return f"{m.group(1)}{m.group(2)}" if m else None
+
+
 def classify(private_total, in_shared_library, shared_pk, missing_names,
              require_shared_library=True):
     """Which of the four states an album is in.
@@ -186,7 +287,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("library")
     parser.add_argument("--albums", help="TSV with a 'name' column; default is every album")
-    parser.add_argument("--verbose", action="store_true", help="list the missing filenames")
+    parser.add_argument("--verbose", action="store_true", help="list the missing items (name and capture time)")
     parser.add_argument("--no-shared-library", action="store_true",
                         help="skip the Shared Library check; compare private albums "
                              "against their shared-album twins only")
@@ -201,11 +302,16 @@ def main() -> None:
         with open(args.albums) as handle:
             wanted = [r["name"] for r in csv.DictReader(handle, delimiter="\t")]
     else:
-        wanted = sorted(live)
+        # Display the raw title, but look up by the normalised key.
+        wanted = sorted(
+            {t for (t,) in con.execute(
+                "select ZTITLE from ZGENERICALBUM where ZKIND=2 and ZTITLE is not null "
+                "and (ZTRASHEDSTATE is null or ZTRASHEDSTATE=0)")},
+            key=norm_title)
 
     buckets: dict[str, list] = collections.defaultdict(list)
     for title in wanted:
-        pk = live.get(title)
+        pk = live.get(norm_title(title))
         if pk is None:
             buckets["private album no longer exists"].append((title, "", [], []))
             continue
@@ -217,24 +323,23 @@ def main() -> None:
             f"where j.{album_col}=? and x.ZLIBRARYSCOPE=1", (pk,)
         ).fetchone()[0]
 
-        share_pk = shares.get(title)
+        share_pk = shares.get(norm_title(title))
         missing: list[str] = []
         if share_pk is not None:
-            def names(sql, arg):
-                return collections.Counter(
-                    r[0] for r in con.execute(sql, (arg,)) if r[0]
-                )
-            private_names = names(
-                f"select aa.ZORIGINALFILENAME from {join} j "
+            def items(sql, arg):
+                return [(name or "", when) for name, when in con.execute(sql, (arg,))]
+            private_items = items(
+                f"select aa.ZORIGINALFILENAME, x.ZDATECREATED from {join} j "
                 f"join ZASSET x on x.Z_PK=j.{asset_col} "
                 "join ZADDITIONALASSETATTRIBUTES aa on aa.ZASSET=x.Z_PK "
                 f"where j.{album_col}=?", pk)
-            shared_names = names(
-                "select aa.ZORIGINALFILENAME from ZASSET x "
+            shared_items = items(
+                "select aa.ZORIGINALFILENAME, x.ZDATECREATED from ZASSET x "
                 "join ZADDITIONALASSETATTRIBUTES aa on aa.ZASSET=x.Z_PK "
-                "where x.ZCOLLECTIONSHARE=?", share_pk)
+                "where x.ZCOLLECTIONSHARE=? and x.ZTRASHEDSTATE=0", share_pk)
             missing = sorted(
-                n for n in private_names if private_names[n] > shared_names.get(n, 0)
+                f"{name or '(no name)'}  {apple_date(when)}"
+                for name, when in match_assets(private_items, shared_items)
             )
 
         people = invitees.get(share_pk, []) if share_pk is not None else []

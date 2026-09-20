@@ -133,9 +133,13 @@ supporting code in `tools/`:
 - **`tools/sharing_status.py`** — read-only report placing each private album
   in one of four states: still has items outside the Shared Library, fully in
   the Shared Library but with no iCloud Shared Album, shared album present but
-  missing items, or fully shared and therefore deletable. Filenames are the
-  only usable join, because a shared album holds its own copies and shares no
-  asset identity with the private album. Its counts are only meaningful once
+  missing items, or fully shared and therefore deletable. A shared album holds
+  its own copies and shares no asset identity with the private album, so
+  `match_assets()` pairs items by capture time (±1 s, then whole-hour shifts,
+  one-to-one), then by filename, and discounts Takeout's `-edited` twins --
+  see `docs/shared-album-reconciliation.md` for the measurements behind each
+  rule; filename-only matching overstated one album's gap 5x. Its counts are
+  only meaningful once
   uploads have settled — a shared album's membership wobbles for hours after
   it is created, and a *moving* shortfall means sync, not failure.
 - **`tools/date_sanity.py`** — read-only scan for capture dates outside a
