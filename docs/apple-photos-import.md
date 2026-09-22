@@ -790,6 +790,46 @@ The ledger is flushed per line and re-read on start, so an interrupted pass
 costs only the files it had not reached. Keep it — it is also the audit trail
 for why any given file was not imported.
 
+## Photos' ordinary windows claim to be dialogs
+
+The dialog watchdog finds alerts by walking Photos' windows and treating any
+whose `subrole` is `AXDialog` or `AXSystemDialog` as one. That is wrong:
+Photos reports its **normal content windows** with subrole `AXDialog` — the
+Library window and each album window. They look like this to System Events:
+
+    DIALOG:: Library | 1 Jan 1970 - 20 Aug 2010 |  BUTTONS:: missing value,missing value,missing value,
+    DIALOG:: <album> | 2 Photos - January 2013 - January 2014 |  BUTTONS:: missing value,missing value,missing value,
+
+The "static texts" are the window title and the toolbar's date range for
+whatever is on screen, and the three unnamed buttons are the traffic lights.
+On 2026-09-22 one such window was reported as an alert every 10 seconds for
+80 minutes.
+
+Two things made that expensive, both now fixed:
+
+* **The dismissal rule was one step from clicking the close box.** The
+  watchdog clicks a button called `OK`, *or the lone button if there is only
+  one*. A window with three unnamed buttons escaped only because of the
+  count. Test for a **named** button before treating a window as an alert:
+  `name of b is missing value` is true for a traffic light and false for
+  every real alert button.
+* **A false alert poisons the reject list.** The watchdog records which file
+  was in flight when an alert fired, by reading the last `Importing` line of
+  the newest `osxphotos-*.log`. That log survives for weeks after a run, so
+  with no import running it names whatever finished *last month* — here, a
+  file that had imported perfectly well, appended once per cycle until the
+  reject list held 596 copies of it. Ignore the log unless it has been
+  written to in the last few minutes.
+
+Separately, an alert the watchdog **cannot** clear (one offering a real
+choice, which it deliberately leaves for a human) stays on screen, so it is
+re-read and re-reported every cycle forever. Log an unchanged unclearable
+alert once, then every half hour: quiet, but never invisible.
+
+A date range beginning `1 Jan 1970` is worth noticing in its own right — it
+means an asset with a bogus capture date is sorting to the very front of the
+library. See `tools/date_sanity.py`.
+
 ## Things that are not the problem
 
 Recorded because each cost real time:

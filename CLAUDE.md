@@ -142,6 +142,12 @@ supporting code in `tools/`:
   only meaningful once
   uploads have settled — a shared album's membership wobbles for hours after
   it is created, and a *moving* shortfall means sync, not failure.
+- The dialog watchdog that runs alongside an import lives outside this repo
+  (it drives Photos in the importing user's GUI session), but its two
+  hard-won rules are written up in `docs/apple-photos-import.md`: Photos'
+  ordinary windows report subrole `AXDialog`, so test for a *named* button
+  before treating a window as an alert, and never read the in-flight filename
+  from an `osxphotos-*.log` that nothing is currently writing to.
 - **`tools/date_sanity.py`** — read-only scan for capture dates outside a
   plausible range. Photos sorts these to the very start or end of the library
   where nobody scrolls, so they persist for years; the tool prints the UUID so
