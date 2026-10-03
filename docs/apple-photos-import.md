@@ -540,6 +540,43 @@ assets over five hours while the mingle-reset counter read zero, so resets
 alone are not sufficient. Small dips of a few tens are ordinary state churn;
 set the tolerance well above that (200 worked) and stop hard if it is crossed.
 
+## On fast storage, "uploaded" means queued, not sent
+
+`ZCLOUDLOCALSTATE` flips to `1` when the iCloud engine *accepts* an asset into
+its upload queue, not when the bytes have left the machine. While the library
+lived on a slow USB hard disk the two happened close enough together that
+nobody noticed. After moving it to an NVMe SSD, a batch of 8,551 files reached
+`ZCLOUDLOCALSTATE=1` within ten minutes of the import finishing, so the
+harness declared the batch drained, while Photos itself still said 6,445
+items to go and the real upload took another four hours.
+
+The real backlog is in the iCloud engine's own store inside the library:
+
+    resources/cpl/cloudsync.noindex/storage/store.cloudphotodb
+    select count(*) from outgoingResources;
+
+Measured overnight, sampled every two minutes against bytes sent on the
+network interface: `outgoingResources` fell from 7,122 to 0 in step with the
+upload (about 30 a minute at ~20 Mbit/s), paused when the network paused, and
+reached zero two minutes before the interface went quiet. `pushRepository`
+moves with it. `recordComputeStatePushQueue` stays flat during the upload and
+drains afterwards in a few minutes, with negligible traffic. The
+`ZCLOUDLOCALSTATE` count read the same 5 for the entire four hours.
+
+So:
+
+* **Wait on `outgoingResources`**, baselined before the import like the pending
+  count above, read with `mode=ro` (never `immutable=1`, which ignores the WAL).
+* **Detect stalls on it too.** The Photos.sqlite count reaches its floor in
+  minutes, so a stall check on it can never fire.
+* **Refuse to start a batch while it is non-trivial.** Stacking imports on an
+  unfinished upload is the pattern that preceded the mingle-reset loop. The
+  harness now waits until fewer than 200 resources are queued before importing.
+* **Measuring the upload itself:** `nettop` cannot see another user's
+  processes, but interface byte counters (`netstat -ib -I <iface>`, `Obytes`)
+  can, and attribute everything to whichever interface carries the default
+  route.
+
 ## One refused file can cost you the whole batch
 
 Photos raises a modal alert for each file it refuses — *"This item cannot be
@@ -620,6 +657,33 @@ already imported and starts on whatever broke it last time. That looks exactly
 like "this file is corrupt" and is not. Check whether successes and failures
 *interleave* in the attempt that made progress: a cascade is N successes, then
 nothing but failures to the end.
+
+### On an SSD the limit is per Photos session, and tracks analysis load
+
+With the library on an SSD, imports ran about six times faster and a
+different pattern appeared. Refusals no longer clustered at a fixed count per
+invocation. They came in waves of 90 to 200 per 750-file chunk, every second or
+third chunk after Photos was restarted, getting worse as the batch went on,
+while `mediaanalysisd` ran at 100-170% CPU analysing the new arrivals. The
+refused files were ordinary: 108 of 111 sampled were plain H.264 High-profile
+MP4. Once analysis went quiet, a retry imported 946 of the 983 refused files
+with almost no further refusals, even though the WAL had grown to 8.8 GB by
+then. So the useful lever is analysis load, not WAL size: pause between
+chunks while `mediaanalysisd` is busy rather than pushing on.
+
+What genuinely failed, every time: two-to-three-second 1440x1080 MP4s with
+uncompressed PCM audio and extra data tracks. These look like Google's export of
+Live Photo motion clips, and PCM inside an MP4 container is non-standard.
+
+### Match only your own user's Photos
+
+A restart helper that finds Photos with `pgrep -f Photos.app/...` and takes
+`head -1` will pick up **another logged-in user's Photos** if its process ID is
+lower. The helper then watches the wrong process, escalates quit to `TERM` to
+`KILL` against a Photos that never goes away (the signals cannot reach another
+user's process), and reports "could not restart Photos" every time, although
+its own user's Photos did restart. Always use `pgrep -u "$(id -u)"` and
+`pkill -u "$(id -u)"`.
 
 ## A major OS update resets TCC grants
 
