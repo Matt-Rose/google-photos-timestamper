@@ -137,12 +137,32 @@ state: never checkpointed since creation.
 
 **Fixes**, in order of preference:
 
+- **Restart `photolibraryd` as the owning user, no logout needed.** `launchctl`
+  refuses to stop it (SIP), but a plain `kill -TERM` from the account that owns
+  it is allowed. Measured on a 15.7 GB log with nothing folded back in 14 hours:
+  confirm the iCloud engine has nothing left to upload (`outgoingResources` is
+  0, see "On fast storage" below), quit Photos, `TERM` `mediaanalysisd` and
+  `photoanalysisd`, then `TERM` `photolibraryd`. Being the last connection, it
+  checkpointed and truncated the log to 0 as it exited, inside a minute; the
+  database grew 2.6 -> 2.9 GB and a read-only `pragma quick_check` returned
+  `ok`. It did not respawn by itself; reopening Photos started it.
+  Stopping only the analysis daemons, or the lingering
+  `com.apple.CloudPhotosConfiguration` helper (which ignores `TERM` and needs
+  `KILL`), did **not** move it.
 - Quit Photos and its daemons, then relaunch. Releasing the pinned reader lets
   the checkpoint complete on its own. This cleared 26.5 GB -> 4.9 MB.
 - An explicit `PRAGMA wal_checkpoint(TRUNCATE);` with **every** connection
-  closed. This cleared 59.7 GB -> 0 in 1537s. It requires the owning user to
-  be logged out: `photolibraryd` is a LaunchAgent that respawns instantly, and
-  a respawned reader blocks the truncation indefinitely.
+  closed, from another account with the owning user logged out. This cleared
+  59.7 GB -> 0 in 1537s. Still the most certain route, but the first option
+  makes it unnecessary in most cases.
+
+**Read the `-shm` header before acting.** SQLite never shrinks the log file
+while connections stay open, so its size can be mostly recycled space. The
+wal-index header says how much is live: `mxFrame` (offset 16) is the number of
+pages in the log and `nBackfill` (offset 96) how many are already folded back;
+the five reader marks at offsets 100-119 show where readers are parked. A mark
+stuck at a low page number while `mxFrame` is in the millions is the pinned
+reader.
 
 **Do not diagnose WAL size as the cause of a slow import without checking.**
 A library with a 49 GB WAL imported ~3.4k items successfully while one with a
