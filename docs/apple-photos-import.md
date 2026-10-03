@@ -678,18 +678,27 @@ like "this file is corrupt" and is not. Check whether successes and failures
 *interleave* in the attempt that made progress: a cascade is N successes, then
 nothing but failures to the end.
 
-### On an SSD the limit is per Photos session, and tracks analysis load
+### On an SSD the limit is per Photos session
 
 With the library on an SSD, imports ran about six times faster and a
 different pattern appeared. Refusals no longer clustered at a fixed count per
-invocation. They came in waves of 90 to 200 per 750-file chunk, every second or
-third chunk after Photos was restarted, getting worse as the batch went on,
-while `mediaanalysisd` ran at 100-170% CPU analysing the new arrivals. The
-refused files were ordinary: 108 of 111 sampled were plain H.264 High-profile
-MP4. Once analysis went quiet, a retry imported 946 of the 983 refused files
-with almost no further refusals, even though the WAL had grown to 8.8 GB by
-then. So the useful lever is analysis load, not WAL size: pause between
-chunks while `mediaanalysisd` is busy rather than pushing on.
+osxphotos invocation. They clustered by **Photos app session**: across two
+batches, the first two 750-file chunks after each Photos restart refused
+about 16-26 files each, and the third refused 90-206. The refused files were
+ordinary (108 of 111 sampled were plain H.264 High-profile MP4; most of the
+rest were JPEGs).
+
+It is not analysis load, although the first batch made it look that way
+(`mediaanalysisd` was running at 100-170% while the waves grew). In the second
+batch the harness paused between chunks until analysis was quiet: the third
+chunk of a session still refused 105 files after a seven-minute rest with
+analysis at 0%. Sampling every 30 seconds also ruled out the Photos app's own
+memory, which stayed flat at 120-190 MB. Whatever builds up, only a restart
+clears it, and a restart always did.
+
+So restart Photos **before** the third chunk of each session (every two
+chunks), not after it has refused a hundred files. The restart costs about a
+minute; the alternative is a hundred refusals and a retry pass.
 
 What genuinely failed, every time: two-to-three-second 1440x1080 MP4s with
 uncompressed PCM audio and extra data tracks. These look like Google's export of
