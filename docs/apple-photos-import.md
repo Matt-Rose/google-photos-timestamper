@@ -704,6 +704,26 @@ What genuinely failed, every time: two-to-three-second 1440x1080 MP4s with
 uncompressed PCM audio and extra data tracks. These look like Google's export of
 Live Photo motion clips, and PCM inside an MP4 container is non-standard.
 
+### Chunking must never split a Live Photo pair
+
+`--auto-live` can only join a still and its motion clip when both are in the
+**same** osxphotos invocation. A harness that caps invocations by cutting the
+file list with `split -l` will separate pairs whenever the list is not in
+stem order, and a list produced by pruning or striding usually is not. Measured
+on one 8,438-file batch: of 3,170 motion clips, 149 landed in the same chunk as
+their still and 2,971 did not. Each split pair became a plain still plus a
+standalone two-second video, and the clips were easy to miss because Google's
+exports of them (PCM audio in an MP4) were also being refused in large numbers
+when Photos was tired, then imported on the retry. Group by folder and
+filename stem first, then pack whole groups into chunks; the same list then
+split zero pairs.
+
+Two related traps when checking for this in `Photos.sqlite`: a Live Photo's
+video starts a second or two before the still, so match clip to still with a
+tolerance of a few seconds, not one; and `ZADDEDDATE + 978307200 >
+strftime('%s', ...)` compares a number with text, which SQLite always treats as
+false, so it silently finds nothing. Cast the right-hand side to an integer.
+
 ### Match only your own user's Photos
 
 A restart helper that finds Photos with `pgrep -f Photos.app/...` and takes
