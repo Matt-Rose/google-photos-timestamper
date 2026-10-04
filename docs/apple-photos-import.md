@@ -716,13 +716,41 @@ standalone two-second video, and the clips were easy to miss because Google's
 exports of them (PCM audio in an MP4) were also being refused in large numbers
 when Photos was tired, then imported on the retry. Group by folder and
 filename stem first, then pack whole groups into chunks; the same list then
-split zero pairs.
+split zero pairs. (But see below: grouping by stem also puts unrelated files
+with colliding numbers together, and once Live Photos are not wanted, chunks in
+capture-date order with no two same-stem files per chunk are safer.)
 
 Two related traps when checking for this in `Photos.sqlite`: a Live Photo's
 video starts a second or two before the still, so match clip to still with a
 tolerance of a few seconds, not one; and `ZADDEDDATE + 978307200 >
 strftime('%s', ...)` compares a number with text, which SQLite always treats as
 false, so it silently finds nothing. Cast the right-hand side to an integer.
+
+### `--auto-live` pairs by name alone, and osxphotos' report is wrong both ways
+
+**Live Photo pairing trusts the filename.** `--auto-live` joins any still and
+video that share a stem in the same import, without checking that they were
+taken together. A library exported from an account that received photos from
+two phones has colliding numbers (`IMG_0903.HEIC` from February, an unrelated
+`IMG_0903.MOV` from August), and the pairing attached the unrelated video as
+the still's "motion". Of 480 pairs it made, 81 were genuine and 399 joined
+files 40 to 349 days apart. The videos were real (four seconds or longer) and
+became invisible as videos. Check the capture times before pairing, or do not
+pair: here the fix was to hold out motion clips and turn `--auto-live` off.
+
+**A "failed" import may have succeeded.** osxphotos reported 138 JPGs as failed
+on three consecutive attempts; Photos had imported every one each time. With
+`--resume` trusting the report, each retry imported them again: three copies of
+each. A library-wide check then found 644 such extra copies, accumulated since
+retries were introduced. Combined with the opposite failure (733 clips reported
+imported that Photos never kept, above), the conclusion is that osxphotos'
+report cannot be trusted in either direction. Decide what to import, and
+whether an import succeeded, from `Photos.sqlite` itself: a file is present if
+a live asset has the same original filename **and** capture time.
+
+Neither file size nor filename alone works for that test. Photos stores some
+originals at a different size from the file imported, and numbers repeat
+across years and devices.
 
 ### Match only your own user's Photos
 
