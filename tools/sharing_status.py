@@ -127,11 +127,22 @@ def live_albums(con: sqlite3.Connection) -> dict[str, int]:
     return out
 
 
+# ZSHARE.ZSCOPETYPE values that are iCloud Shared Albums. 0 is every album
+# shared before October 2026; albums created on macOS 27 from then on are
+# stored as 7, with the same ZASSET.ZCOLLECTIONSHARE membership. 4 is the
+# Shared Library itself and must stay out.
+SHARED_ALBUM_SCOPES = (0, 7)
+
+
 def shared_albums(con: sqlite3.Connection) -> dict[str, int]:
+    """Newest shared album per (normalised) title."""
+    marks = ",".join("?" * len(SHARED_ALBUM_SCOPES))
     return {
         norm_title(title): pk
         for pk, title in con.execute(
-            "select Z_PK, ZTITLE from ZSHARE where ZSCOPETYPE=0 and ZTITLE is not null"
+            f"select Z_PK, ZTITLE from ZSHARE where ZSCOPETYPE in ({marks}) "
+            "and ZTITLE is not null order by Z_PK",
+            SHARED_ALBUM_SCOPES,
         )
     }
 
