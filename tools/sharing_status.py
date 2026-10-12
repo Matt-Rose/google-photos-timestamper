@@ -128,10 +128,11 @@ def live_albums(con: sqlite3.Connection) -> dict[str, int]:
 
 
 # ZSHARE.ZSCOPETYPE values that are iCloud Shared Albums. 0 is every album
-# shared before October 2026; albums created on macOS 27 from then on are
-# stored as 7, with the same ZASSET.ZCOLLECTIONSHARE membership. 4 is the
-# Shared Library itself and must stay out.
-SHARED_ALBUM_SCOPES = (0, 7)
+# shared before October 2026, owned or joined. Albums created on macOS 27 from
+# then on are 7 in the owner's library and 8 in an invitee's once accepted,
+# with the same ZASSET.ZCOLLECTIONSHARE membership. 4 is the Shared Library
+# itself (5 its invitation) and must stay out.
+SHARED_ALBUM_SCOPES = (0, 7, 8)
 
 
 def shared_albums(con: sqlite3.Connection) -> dict[str, int]:

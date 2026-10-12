@@ -355,7 +355,8 @@ Hard-coding `ZMASTERFINGERPRINT` against a current library raises
 ### iCloud Shared Albums live in `ZSHARE`, not `ZGENERICALBUM`
 
     -- the shared albums themselves (ZSCOPETYPE 0 = shared album, 4 = Shared Library;
-    -- albums shared from macOS 27 in October 2026 onwards appear as 7, not 0)
+    -- albums shared from macOS 27 in October 2026 onwards appear as 7 in the
+    -- owner's library and 8 in an invitee's, not 0)
     select Z_PK, ZSCOPETYPE, ZTITLE, ZASSETCOUNT from ZSHARE;
     -- their members: ZASSET.ZCOLLECTIONSHARE joins to ZSHARE.Z_PK
     select ZCOLLECTIONSHARE, count(*) from ZASSET where ZCOLLECTIONSHARE is not null group by 1;
