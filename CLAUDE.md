@@ -12,15 +12,19 @@ migration. Full pytest suite in place (`pixi run test` / `pixi run test-all`).
 Known correctness bugs from the original script have been fixed; see "Fixed
 gotchas" below before assuming similar-looking code elsewhere is still broken.
 
-**Migration status, 2026-09-12.** Phase one (metadata restore) and phase two
-(album import) are done: 37 Google shared albums downloaded, prepared and
-imported. What remains is manual GUI work — moving albums into the Shared
-Library and creating iCloud Shared Albums, neither of which is scriptable —
-tracked with `tools/sharing_status.py` (use `--no-shared-library` for a
-library whose owner never used the Shared Library, or every album reports as
-not-yet-shared and the private-vs-shared comparison never runs). Phase three is the bulk import of a
-second, much larger Takeout with no album structure; `tools/prune_imported.py`
-is the front half of that and has not yet been run at scale.
+**Migration status, 2026-10-13: complete.** All three phases are done —
+metadata restore, the 37 shared albums (imported and re-shared as iCloud
+Shared Albums, verified with `tools/sharing_status.py`), and the bulk import
+of the large unstructured Takeout, pruned with `tools/prune_imported.py`. A
+second library imported earlier without these tools was reconciled
+afterwards: of ~14.5k files, everything was present except a handful of VP9
+videos (transcoded and added) and a few corrupt files. The intermediate
+working trees have been deleted; only the original Takeout tarballs and the
+packed web downloads were kept. Nothing here is under active development —
+treat the code and `docs/` as a worked record for the next migration. If you
+rerun `sharing_status.py`, use `--no-shared-library` for a library whose
+owner never used the Shared Library, or every album reports as
+not-yet-shared and the private-vs-shared comparison never runs.
 
 ## Architecture notes
 
